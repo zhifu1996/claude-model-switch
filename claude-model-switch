@@ -455,7 +455,10 @@ def list_models_json():
         print('{"error": "Failed to fetch models"}')
         return
 
-    result = {"models": [{"id": m} for m in all_models]}
+    # Use same sorting as interactive mode
+    claude_models, gemini_models, other_models = classify_models(all_models)
+    sorted_models = claude_models + gemini_models + other_models
+    result = {"models": [{"id": m} for m in sorted_models]}
     print(json.dumps(result))
 
 
@@ -466,13 +469,17 @@ def switch_model_by_index(index):
         print(f'{{"error": "Failed to fetch models"}}')
         return
 
+    # Use same sorting as interactive mode
+    claude_models, gemini_models, other_models = classify_models(all_models)
+    sorted_models = claude_models + gemini_models + other_models
+
     try:
         idx = int(index)
-        if idx < 1 or idx > len(all_models):
-            print(f'{{"error": "Invalid index. Available range: 1-{len(all_models)}"}}')
+        if idx < 1 or idx > len(sorted_models):
+            print(f'{{"error": "Invalid index. Available range: 1-{len(sorted_models)}"}}')
             return
 
-        selected_model = all_models[idx - 1]
+        selected_model = sorted_models[idx - 1]
         if update_model(selected_model, "all"):
             print(json.dumps({
                 "success": True,
