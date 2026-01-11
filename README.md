@@ -10,7 +10,8 @@ A CLI tool for quickly switching Claude Code default models. Automatically fetch
 - Highlights currently selected model
 - Batch operations to sync all models
 - Environment variable priority: automatically clears `~/.claude/settings.json` to ensure `~/.bashrc` settings take precedence
-- Automatic environment refresh: re-sources `~/.bashrc` immediately after switching models
+- **Shell wrapper function for automatic environment refresh** - no need to manually run `source ~/.bashrc`
+- Script sync/update functionality to keep `~/.local/bin` in sync with project files
 
 ## Screenshot
 
@@ -55,32 +56,35 @@ Current Configuration:
 
 ## Installation
 
-1. Clone the repository:
+### Method 1: Using install.sh (Recommended)
 
 ```bash
 git clone https://github.com/yourusername/claude-model-switch.git
 cd claude-model-switch
+./install.sh
+source ~/.bashrc
 ```
 
-2. Copy the scripts to your local bin:
+This will:
+- Copy scripts to `~/.local/bin/`
+- Add `model-switch` wrapper function to `~/.bashrc` for automatic environment refresh
+- Ensure `~/.local/bin` is in your PATH
+
+### Method 2: Manual Installation
 
 ```bash
+git clone https://github.com/yourusername/claude-model-switch.git
+cd claude-model-switch
 cp claude-model-switch ~/.local/bin/
-cp claude-model-switch ~/.local/bin/claude-model-list
+cp uninstall.sh ~/.local/bin/claude-model-switch-uninstall
 chmod +x ~/.local/bin/claude-model-switch
-chmod +x ~/.local/bin/claude-model-list
+chmod +x ~/.local/bin/claude-model-switch-uninstall
 ```
 
-3. Make sure `~/.local/bin` is in your PATH. Add to `~/.bashrc` if needed:
+Make sure `~/.local/bin` is in your PATH:
 
 ```bash
 export PATH="$HOME/.local/bin:$PATH"
-```
-
-4. Reload your shell:
-
-```bash
-source ~/.bashrc
 ```
 
 ## Configuration
@@ -99,7 +103,15 @@ export ANTHROPIC_DEFAULT_SONNET_MODEL="claude-3-sonnet"
 
 ## Usage
 
-Simply run:
+### Interactive Mode
+
+Use the `model-switch` wrapper command (recommended - auto-refreshes environment):
+
+```bash
+model-switch
+```
+
+Or run directly (requires manual `source ~/.bashrc` after switching):
 
 ```bash
 claude-model-switch
@@ -133,7 +145,21 @@ claude-model-switch
 ```bash
 claude-model-switch --list     # List all models (JSON format)
 claude-model-switch 3          # Switch to model #3
+claude-model-switch --update   # Sync scripts to ~/.local/bin
 claude-model-switch --help     # Show help
+```
+
+## Updating Scripts
+
+After modifying the project files, sync to `~/.local/bin`:
+
+```bash
+# Method 1: Using --update flag
+cd /path/to/claude-model-switch
+./claude-model-switch --update
+
+# Method 2: Re-run install.sh
+./install.sh
 ```
 
 ## Usage from Claude Code
@@ -156,19 +182,24 @@ Restart Claude Code after first run to use these tools in conversations.
 | `ANTHROPIC_DEFAULT_OPUS_MODEL` | Opus-level model |
 | `ANTHROPIC_DEFAULT_SONNET_MODEL` | Sonnet-level model |
 
+## Why Environment Variables Don't Refresh Automatically
+
+Due to Unix/Linux process model limitations, a child process (Python script) cannot modify the parent process's (shell) environment variables. The `model-switch` wrapper function solves this by running `source ~/.bashrc` in the same shell process after the script exits.
+
 ## Uninstall
 
 Run the uninstall script:
 
 ```bash
-./uninstall.sh
+claude-model-switch-uninstall
 ```
 
-Or manually:
-
-```bash
-rm ~/.local/bin/claude-model-switch
-```
+This will remove:
+- `~/.local/bin/claude-model-switch`
+- `~/.local/bin/claude-model-switch-uninstall`
+- `~/.claude/tools/model-list.json`
+- `~/.claude/tools/model.json`
+- Shell wrapper function from `~/.bashrc`
 
 ## License
 

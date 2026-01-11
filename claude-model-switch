@@ -19,6 +19,8 @@ API_KEY = os.environ.get("ANTHROPIC_AUTH_TOKEN", "your-api-key-here")
 CONFIG_FILE = os.path.expanduser("~/.bashrc")
 SETTINGS_FILE = os.path.expanduser("~/.claude/settings.json")
 TOOLS_DIR = os.path.expanduser("~/.claude/tools")
+INSTALL_DIR = os.path.expanduser("~/.local/bin")
+PROJECT_DIR = os.path.dirname(os.path.abspath(__file__))
 
 # ANSI color codes
 RED = '\033[0;31m'
@@ -129,9 +131,39 @@ def refresh_env():
                 if '=' in line:
                     key, value = line.split('=', 1)
                     os.environ[key] = value
-            print(f"{GREEN}Environment refreshed successfully{NC}")
+            print(f"{GREEN}Environment variables updated in current process.{NC}")
+            print(f"{YELLOW}Note: To apply changes in your shell, run: source ~/.bashrc{NC}")
+            print(f"{YELLOW}Or use 'model-switch' command (if installed via install.sh) for auto-refresh.{NC}")
     except Exception as e:
         print(f"{YELLOW}Could not refresh environment: {e}{NC}")
+
+
+def sync_to_install_dir():
+    """Sync current script and uninstall.sh to ~/.local/bin"""
+    script_path = os.path.abspath(__file__)
+    script_dir = os.path.dirname(script_path)
+
+    os.makedirs(INSTALL_DIR, exist_ok=True)
+
+    # Copy main script
+    dest_script = os.path.join(INSTALL_DIR, "claude-model-switch")
+    shutil.copy2(script_path, dest_script)
+    os.chmod(dest_script, 0o755)
+    print(f"{GREEN}Updated: {dest_script}{NC}")
+
+    # Copy uninstall script if exists
+    uninstall_src = os.path.join(script_dir, "uninstall.sh")
+    if os.path.exists(uninstall_src):
+        uninstall_dest = os.path.join(INSTALL_DIR, "claude-model-switch-uninstall")
+        shutil.copy2(uninstall_src, uninstall_dest)
+        os.chmod(uninstall_dest, 0o755)
+        print(f"{GREEN}Updated: {uninstall_dest}{NC}")
+
+    # Update Claude Code tools (regenerate with new paths)
+    install_claude_tools()
+
+    print(f"\n{GREEN}Sync complete!{NC}")
+    return True
 
 
 def install_claude_tools():
@@ -467,14 +499,24 @@ def main():
             switch_model_by_index(arg)
             return
 
+        # Update/sync to install directory
+        if arg in ['--update', '-u', '--sync']:
+            print(f"{BLUE}Syncing scripts to {INSTALL_DIR}...{NC}")
+            sync_to_install_dir()
+            return
+
         # Help
         if arg in ['--help', '-h']:
             print("Usage: claude-model-switch [OPTIONS] [INDEX]")
             print("")
             print("Options:")
             print("  -l, --list         List all models (JSON format)")
+            print("  -u, --update       Sync scripts to ~/.local/bin")
             print("  INDEX              Switch to model by index number")
             print("  -h, --help         Show this help message")
+            print("")
+            print("For auto environment refresh, use 'model-switch' wrapper")
+            print("(installed via install.sh)")
             return
 
     # Interactive mode

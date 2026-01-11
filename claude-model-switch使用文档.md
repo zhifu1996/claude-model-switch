@@ -4,29 +4,58 @@
 
 Claude Model Switch 是一个交互式工具，用于快速切换 Claude Code 的默认模型。它从你的 CLIProxyAPI 自动获取可用模型列表，并支持分别设置不同的模型配置。
 
+## 新特性
+
+- **自动环境变量刷新**：使用 `model-switch` 命令切换模型后，环境变量会自动生效，无需手动执行 `source ~/.bashrc`
+- **脚本同步更新**：使用 `--update` 选项可将项目文件同步到 `~/.local/bin`
+
 ## 安装
 
-脚本已自动安装到：`~/.local/bin/claude-model-switch`
+### 方法一：使用 install.sh（推荐）
 
-确保 `~/.bashrc` 中包含以下配置（通常已存在）：
+```bash
+cd /path/to/claude-model-switch
+./install.sh
+source ~/.bashrc
+```
+
+安装脚本会：
+- 复制脚本到 `~/.local/bin/`
+- 添加 `model-switch` wrapper 函数到 `~/.bashrc`（用于自动刷新环境变量）
+- 确保 `~/.local/bin` 在 PATH 中
+
+### 方法二：手动安装
+
+```bash
+cp claude-model-switch ~/.local/bin/
+cp uninstall.sh ~/.local/bin/claude-model-switch-uninstall
+chmod +x ~/.local/bin/claude-model-switch
+chmod +x ~/.local/bin/claude-model-switch-uninstall
+```
+
+确保 `~/.bashrc` 中包含：
 
 ```bash
 export PATH="$HOME/.local/bin:$PATH"
 ```
 
-然后运行以下命令使配置生效：
-
-```bash
-source ~/.bashrc
-```
+然后运行 `source ~/.bashrc` 使配置生效。
 
 ## 使用方法
 
-在终端中运行：
+### 推荐方式（自动刷新环境变量）
+
+```bash
+model-switch
+```
+
+### 直接运行（需手动刷新环境变量）
 
 ```bash
 claude-model-switch
 ```
+
+切换后需要手动执行 `source ~/.bashrc`。
 
 ### 主界面说明
 
@@ -81,19 +110,44 @@ API: https://cliproxyapi.1049131.xyz
 | [4] | 设置 Sonnet 模型 |
 | [5] | 设置所有模型 |
 
+### 命令行选项
+
+```bash
+claude-model-switch --list     # 列出所有模型（JSON 格式）
+claude-model-switch 3          # 切换到第 3 个模型
+claude-model-switch --update   # 同步脚本到 ~/.local/bin
+claude-model-switch --help     # 显示帮助
+```
+
+## 更新脚本
+
+修改项目文件后，同步到 `~/.local/bin`：
+
+```bash
+# 方法一：使用 --update 选项
+cd /path/to/claude-model-switch
+./claude-model-switch --update
+
+# 方法二：重新运行安装脚本
+./install.sh
+```
+
 ## 卸载
 
 运行卸载脚本：
 
 ```bash
-~/.local/bin/claude-model-switch-uninstall
+claude-model-switch-uninstall
 ```
 
 卸载脚本会：
 
 1. 删除 `~/.local/bin/claude-model-switch`
-2. 删除自身 `~/.local/bin/claude-model-switch-uninstall`
-3. 可选：删除 `~/.bash_aliases` 中的相关 alias
+2. 删除 `~/.local/bin/claude-model-switch-uninstall`
+3. 删除 `~/.claude/tools/model-list.json`
+4. 删除 `~/.claude/tools/model.json`
+5. 从 `~/.bashrc` 中移除 `model-switch` wrapper 函数
+6. 可选：删除 `~/.bash_aliases` 中的相关 alias
 
 注意：卸载脚本**不会**修改 `~/.bashrc` 中的 Claude Code 环境变量配置。
 
@@ -106,8 +160,9 @@ API: https://cliproxyapi.1049131.xyz
 rm ~/.local/bin/claude-model-switch
 rm ~/.local/bin/claude-model-switch-uninstall
 
-# 如果在 ~/.bash_aliases 中添加了 alias，删除对应行
-# 例如：alias model-switch='~/.local/bin/claude-model-switch'
+# 删除 Claude Code tools
+rm ~/.claude/tools/model-list.json
+rm ~/.claude/tools/model.json
 
 # 重新加载配置
 source ~/.bashrc
@@ -121,8 +176,8 @@ source ~/.bashrc
 
 ```bash
 # 在 ~/.bashrc 中确认
-export ANTHROPIC_BASE_URL="https://cliproxyapi.1049131.xyz"
-export ANTHROPIC_AUTH_TOKEN="zhifu1996"
+export ANTHROPIC_BASE_URL="https://your-api-endpoint"
+export ANTHROPIC_AUTH_TOKEN="your-token"
 ```
 
 然后运行：
@@ -131,6 +186,13 @@ export ANTHROPIC_AUTH_TOKEN="zhifu1996"
 source ~/.bashrc
 claude-model-switch
 ```
+
+### Q: 为什么切换模型后 Claude Code 还是用旧模型？
+
+这是因为子进程无法修改父进程的环境变量。解决方案：
+
+1. **使用 `model-switch` 命令**（推荐）：通过 install.sh 安装后，使用 `model-switch` 命令会自动刷新环境变量
+2. **手动刷新**：运行 `source ~/.bashrc` 后再启动 Claude Code
 
 ### Q: 如何查看当前配置的模型？
 
@@ -143,7 +205,7 @@ grep -E "ANTHROPIC.*MODEL" ~/.bashrc
 在 `~/.bash_aliases` 中添加：
 
 ```bash
-alias ms='~/.local/bin/claude-model-switch'
+alias ms='model-switch'
 ```
 
 然后运行 `source ~/.bash_aliases` 生效。
@@ -164,7 +226,6 @@ alias ms='~/.local/bin/claude-model-switch'
 - Claude Code 会优先读取 `~/.claude/settings.json` 中的模型配置
 - 切换模型时，脚本会自动清理该文件中的 `model` 和 `defaultModel` 配置
 - 确保 `~/.bashrc` 中的环境变量设置始终优先生效
-- 切换后会立即刷新当前 shell 环境，无需手动执行 `source ~/.bashrc`
 
 ## Claude Code 内使用
 
