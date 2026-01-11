@@ -6,18 +6,18 @@ echo "      Claude Model Switch Uninstaller"
 echo "=========================================="
 echo ""
 
-SCRIPT_PATH="$HOME/.local/bin/claude-model-switch"
+SCRIPT_PATH="$HOME/.local/bin/.claude-model-switch-bin"
 UNINSTALL_SCRIPT="$HOME/.local/bin/claude-model-switch-uninstall"
 TOOLS_DIR="$HOME/.claude/tools"
 BASHRC="$HOME/.bashrc"
-WRAPPER_MARKER="# Claude Model Switch wrapper"
+FUNC_MARKER="# Claude Model Switch - auto refresh env vars after switching"
 
 echo "The following will be removed:"
 echo "  1. $SCRIPT_PATH"
 echo "  2. $UNINSTALL_SCRIPT"
 echo "  3. $TOOLS_DIR/model-list.json (if exists)"
 echo "  4. $TOOLS_DIR/model.json (if exists)"
-echo "  5. Shell wrapper function 'model-switch' from ~/.bashrc"
+echo "  5. Shell function 'claude-model-switch' from ~/.bashrc"
 echo ""
 
 files_to_delete=()
@@ -28,12 +28,12 @@ if [ -f "$UNINSTALL_SCRIPT" ]; then
     files_to_delete+=("$UNINSTALL_SCRIPT")
 fi
 
-has_wrapper=false
-if grep -q "$WRAPPER_MARKER" "$BASHRC" 2>/dev/null; then
-    has_wrapper=true
+has_func=false
+if grep -q "$FUNC_MARKER" "$BASHRC" 2>/dev/null; then
+    has_func=true
 fi
 
-if [ ${#files_to_delete[@]} -eq 0 ] && [ ! -f "$TOOLS_DIR/model-list.json" ] && [ ! -f "$TOOLS_DIR/model.json" ] && [ "$has_wrapper" = false ]; then
+if [ ${#files_to_delete[@]} -eq 0 ] && [ ! -f "$TOOLS_DIR/model-list.json" ] && [ ! -f "$TOOLS_DIR/model.json" ] && [ "$has_func" = false ]; then
     echo "No files found to delete."
     exit 0
 fi
@@ -59,13 +59,13 @@ if [ -f "$TOOLS_DIR/model.json" ]; then
     echo "Deleted: $TOOLS_DIR/model.json"
 fi
 
-# Remove shell wrapper function from bashrc
-if [ "$has_wrapper" = true ]; then
-    # Remove wrapper function block (from marker line to closing brace)
-    sed -i "/$WRAPPER_MARKER/,/^}/d" "$BASHRC"
+# Remove shell function from bashrc
+if [ "$has_func" = true ]; then
+    # Remove function block (from marker line to closing brace)
+    sed -i "/$FUNC_MARKER/,/^}/d" "$BASHRC"
     # Remove any trailing empty lines that might be left
     sed -i '/^$/N;/^\n$/d' "$BASHRC"
-    echo "Removed shell wrapper function from ~/.bashrc"
+    echo "Removed shell function 'claude-model-switch' from ~/.bashrc"
 fi
 
 if [ -f "$HOME/.bash_aliases" ]; then

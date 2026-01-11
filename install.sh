@@ -6,7 +6,7 @@ set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 INSTALL_DIR="$HOME/.local/bin"
-SCRIPT_NAME="claude-model-switch"
+SCRIPT_NAME=".claude-model-switch-bin"
 UNINSTALL_NAME="claude-model-switch-uninstall"
 BASHRC="$HOME/.bashrc"
 
@@ -24,9 +24,9 @@ echo ""
 # Create install directory if not exists
 mkdir -p "$INSTALL_DIR"
 
-# Copy main script
-echo -e "${YELLOW}Installing $SCRIPT_NAME...${NC}"
-cp "$SCRIPT_DIR/$SCRIPT_NAME" "$INSTALL_DIR/$SCRIPT_NAME"
+# Copy main script (as hidden file)
+echo -e "${YELLOW}Installing claude-model-switch...${NC}"
+cp "$SCRIPT_DIR/claude-model-switch" "$INSTALL_DIR/$SCRIPT_NAME"
 chmod +x "$INSTALL_DIR/$SCRIPT_NAME"
 echo -e "  Installed: $INSTALL_DIR/$SCRIPT_NAME"
 
@@ -36,11 +36,11 @@ cp "$SCRIPT_DIR/uninstall.sh" "$INSTALL_DIR/$UNINSTALL_NAME"
 chmod +x "$INSTALL_DIR/$UNINSTALL_NAME"
 echo -e "  Installed: $INSTALL_DIR/$UNINSTALL_NAME"
 
-# Shell wrapper function for environment variable refresh
-WRAPPER_MARKER="# Claude Model Switch wrapper"
-WRAPPER_FUNCTION='# Claude Model Switch wrapper - enables env var refresh
-model-switch() {
-    '"$INSTALL_DIR/$SCRIPT_NAME"' "$@"
+# Shell function for environment variable auto-refresh
+FUNC_MARKER="# Claude Model Switch - auto refresh env vars after switching"
+SHELL_FUNCTION='# Claude Model Switch - auto refresh env vars after switching
+claude-model-switch() {
+    ~/.local/bin/.claude-model-switch-bin "$@"
     local exit_code=$?
     if [ $exit_code -eq 0 ]; then
         source ~/.bashrc 2>/dev/null
@@ -48,17 +48,17 @@ model-switch() {
     return $exit_code
 }'
 
-# Check if wrapper already exists in bashrc
-if grep -q "$WRAPPER_MARKER" "$BASHRC" 2>/dev/null; then
-    echo -e "${YELLOW}Updating shell wrapper function...${NC}"
-    # Remove old wrapper (from marker to closing brace)
-    sed -i "/$WRAPPER_MARKER/,/^}/d" "$BASHRC"
+# Check if function already exists in bashrc
+if grep -q "$FUNC_MARKER" "$BASHRC" 2>/dev/null; then
+    echo -e "${YELLOW}Updating shell function...${NC}"
+    # Remove old function (from marker to closing brace)
+    sed -i "/$FUNC_MARKER/,/^}/d" "$BASHRC"
 fi
 
-# Add wrapper function to bashrc
+# Add shell function to bashrc
 echo "" >> "$BASHRC"
-echo "$WRAPPER_FUNCTION" >> "$BASHRC"
-echo -e "${GREEN}Added shell wrapper function 'model-switch' to ~/.bashrc${NC}"
+echo "$SHELL_FUNCTION" >> "$BASHRC"
+echo -e "${GREEN}Added 'claude-model-switch' function to ~/.bashrc${NC}"
 
 # Ensure ~/.local/bin is in PATH
 if ! echo "$PATH" | grep -q "$INSTALL_DIR"; then
@@ -75,8 +75,7 @@ echo -e "${GREEN}Installation complete!${NC}"
 echo ""
 echo "Usage:"
 echo "  1. Run 'source ~/.bashrc' to reload your shell"
-echo "  2. Use 'model-switch' command to switch models (env vars auto-refresh)"
-echo "  3. Or use '$SCRIPT_NAME' directly (requires manual 'source ~/.bashrc')"
+echo "  2. Use 'claude-model-switch' to switch models (env vars auto-refresh)"
 echo ""
 echo "To update later, run this script again from the project directory."
 echo "To uninstall, run: $UNINSTALL_NAME"

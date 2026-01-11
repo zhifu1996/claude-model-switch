@@ -131,9 +131,6 @@ def refresh_env():
                 if '=' in line:
                     key, value = line.split('=', 1)
                     os.environ[key] = value
-            print(f"{GREEN}Environment variables updated in current process.{NC}")
-            print(f"{YELLOW}Note: To apply changes in your shell, run: source ~/.bashrc{NC}")
-            print(f"{YELLOW}Or use 'model-switch' command (if installed via install.sh) for auto-refresh.{NC}")
     except Exception as e:
         print(f"{YELLOW}Could not refresh environment: {e}{NC}")
 
@@ -145,8 +142,8 @@ def sync_to_install_dir():
 
     os.makedirs(INSTALL_DIR, exist_ok=True)
 
-    # Copy main script
-    dest_script = os.path.join(INSTALL_DIR, "claude-model-switch")
+    # Copy main script as hidden file
+    dest_script = os.path.join(INSTALL_DIR, ".claude-model-switch-bin")
     shutil.copy2(script_path, dest_script)
     os.chmod(dest_script, 0o755)
     print(f"{GREEN}Updated: {dest_script}{NC}")
