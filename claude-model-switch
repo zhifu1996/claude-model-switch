@@ -11,11 +11,14 @@ import ssl
 import os
 import re
 import sys
+import shutil
 
 # Configuration - Set these via environment variables
 API_URL = os.environ.get("ANTHROPIC_BASE_URL", "https://api.example.com")
 API_KEY = os.environ.get("ANTHROPIC_AUTH_TOKEN", "your-api-key-here")
 CONFIG_FILE = os.path.expanduser("~/.bashrc")
+SETTINGS_FILE = os.path.expanduser("~/.claude/settings.json")
+TOOLS_DIR = os.path.expanduser("~/.claude/tools")
 
 # ANSI color codes
 RED = '\033[0;31m'
@@ -81,6 +84,101 @@ def get_current_config():
     return result['model'], result['haiku'], result['opus'], result['sonnet']
 
 
+def clear_settings_model():
+    """Clear model settings in ~/.claude/settings.json to allow env var priority"""
+    if not os.path.exists(SETTINGS_FILE):
+        return True
+
+    try:
+        with open(SETTINGS_FILE, 'r') as f:
+            content = f.read()
+
+        # Remove or comment out model-related lines
+        patterns = [
+            r'"model"\s*:\s*"[^"]*"',
+            r'"defaultModel"\s*:\s*"[^"]*"',
+        ]
+
+        modified = False
+        for pattern in patterns:
+            if re.search(pattern, content):
+                content = re.sub(pattern, 'null', content)
+                modified = True
+
+        if modified:
+            with open(SETTINGS_FILE, 'w') as f:
+                f.write(content)
+            print(f"{YELLOW}Cleared model config in {SETTINGS_FILE}{NC}")
+
+        return True
+    except Exception as e:
+        print(f"{RED}Failed to clear settings: {e}{NC}")
+        return False
+
+
+def refresh_env():
+    """Refresh current shell environment by re-sourcing bashrc"""
+    import subprocess
+    try:
+        result = subprocess.run(
+            ['bash', '-c', 'source ~/.bashrc && env | grep ANTHROPIC'],
+            capture_output=True, text=True
+        )
+        if result.returncode == 0:
+            for line in result.stdout.strip().split('\n'):
+                if '=' in line:
+                    key, value = line.split('=', 1)
+                    os.environ[key] = value
+            print(f"{GREEN}Environment refreshed successfully{NC}")
+    except Exception as e:
+        print(f"{YELLOW}Could not refresh environment: {e}{NC}")
+
+
+def install_claude_tools():
+    """Install Claude Code tools configuration to ~/.claude/tools"""
+    # Get the path to the script
+    script_path = os.path.abspath(sys.argv[0])
+    if script_path.endswith('/'):
+        script_path = script_path[:-1]
+
+    # Create tools directory if it doesn't exist
+    os.makedirs(TOOLS_DIR, exist_ok=True)
+
+    # Tool definitions
+    tools = {
+        "model-list.json": {
+            "name": "model-list",
+            "description": "List all available models with index numbers",
+            "command": ["bash", "-c", f"{script_path} --list"]
+        },
+        "model.json": {
+            "name": "model",
+            "description": "Switch model by index number",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "index": {"type": "integer", "description": "Model index number (see /model-list)"}
+                },
+                "required": ["index"]
+            },
+            "command": ["bash", "-c", f"{script_path} ${{index}}"]
+        }
+    }
+
+    installed = []
+    for filename, tool in tools.items():
+        filepath = os.path.join(TOOLS_DIR, filename)
+        with open(filepath, 'w') as f:
+            json.dump(tool, f, indent=2)
+        installed.append(filepath)
+
+    print(f"{GREEN}Installed {len(installed)} Claude Code tools:{NC}")
+    for path in installed:
+        print(f"  - {path}")
+    print(f"{YELLOW}Please restart Claude Code to use the new tools.{NC}")
+    return True
+
+
 def update_model(model, config_type="all"):
     """Update configuration"""
     if not os.path.exists(CONFIG_FILE):
@@ -114,6 +212,11 @@ def update_model(model, config_type="all"):
 
     with open(CONFIG_FILE, 'w') as f:
         f.write(content)
+
+    # Clear settings.json to ensure env var priority
+    clear_settings_model()
+    # Refresh current process environment
+    refresh_env()
 
     return True
 
@@ -314,6 +417,165 @@ def select_model_menu(claude_models, gemini_models, other_models, target_name):
     if choice.isdigit() and 1 <= int(choice) <= len(all_models):
         return all_models[int(choice) - 1]
     return None
+
+
+def list_models_json():
+    """List all models in JSON format for Claude Code tools"""
+    all_models = fetch_models()
+    if not all_models:
+        print('{"error": "Failed to fetch models"}')
+        return
+
+    result = {"models": [{"id": m} for m in all_models]}
+    print(json.dumps(result))
+
+
+def switch_model_by_index(index):
+    """Switch model by index number"""
+    all_models = fetch_models()
+    if not all_models:
+        print(f'{{"error": "Failed to fetch models"}}')
+        return
+
+    try:
+        idx = int(index)
+        if idx < 1 or idx > len(all_models):
+            print(f'{{"error": "Invalid index. Available range: 1-{len(all_models)}"}}')
+            return
+
+        selected_model = all_models[idx - 1]
+        if update_model(selected_model, "all"):
+            print(json.dumps({
+                "success": True,
+                "model": selected_model,
+                "message": f"Model switched to {selected_model}. Please restart Claude Code to apply changes."
+            }))
+    except ValueError:
+        print('{"error": "Invalid index. Please provide a number."}')
+
+
+def main():
+    # Check for command line arguments
+    if len(sys.argv) > 1:
+        arg = sys.argv[1]
+
+        if arg in ['--list', '-l', '--list-json']:
+            list_models_json()
+            return
+
+        if arg.isdigit():
+            switch_model_by_index(arg)
+            return
+
+        # Help
+        if arg in ['--help', '-h']:
+            print("Usage: claude-model-switch [OPTIONS] [INDEX]")
+            print("")
+            print("Options:")
+            print("  -l, --list         List all models (JSON format)")
+            print("  INDEX              Switch to model by index number")
+            print("  -h, --help         Show this help message")
+            return
+
+    # Interactive mode
+    if not sys.version_info >= (3, 7):
+        print(f"{RED}Python 3.7+ required{NC}")
+        sys.exit(1)
+
+    # Auto-install Claude Code tools if not present
+    model_list_tool = os.path.join(TOOLS_DIR, "model-list.json")
+    model_tool = os.path.join(TOOLS_DIR, "model.json")
+    if not (os.path.exists(model_list_tool) and os.path.exists(model_tool)):
+        print(f"{YELLOW}Installing Claude Code tools...{NC}")
+        install_claude_tools()
+        print("")
+
+    all_models = fetch_models()
+    if not all_models:
+        print(f"{RED}Failed to fetch models, exiting{NC}")
+        sys.exit(1)
+
+    claude_models, gemini_models, other_models = classify_models(all_models)
+    config = get_current_config()
+
+    print(f"{GREEN}Found {len(all_models)} models{NC}")
+
+    while True:
+        show_menu(claude_models, gemini_models, other_models, config)
+        choice = input("Enter option: ").strip()
+
+        if choice.isdigit() and 1 <= int(choice) <= (len(claude_models) + len(gemini_models) + len(other_models)):
+            idx = int(choice) - 1
+            all_model_list = claude_models + gemini_models + other_models
+            selected_model = all_model_list[idx]
+            print(f"\nSelected model: {selected_model}")
+            print("  [1] Set Main Model (ANTHROPIC_MODEL)")
+            print("  [2] Set Haiku Model")
+            print("  [3] Set Opus Model")
+            print("  [4] Set Sonnet Model")
+            print("  [5] Set All Models")
+            sub_choice = input("Choose: ").strip()
+
+            config_map = {
+                "1": "main", "2": "haiku", "3": "opus", "4": "sonnet", "5": "all"
+            }
+            if sub_choice in config_map:
+                if update_model(selected_model, config_map[sub_choice]):
+                    type_name = {"main": "Main Model", "haiku": "Haiku", "opus": "Opus", "sonnet": "Sonnet", "all": "All Models"}
+                    print(f"{GREEN}Set {type_name[config_map[sub_choice]]} to: {selected_model}{NC}")
+            config = get_current_config()
+
+        elif choice.lower() == 'h':
+            selected = select_model_menu(claude_models, gemini_models, other_models, "Haiku")
+            if selected and update_model(selected, "haiku"):
+                print(f"{GREEN}Set Haiku Model to: {selected}{NC}")
+                config = get_current_config()
+
+        elif choice.lower() == 'o':
+            selected = select_model_menu(claude_models, gemini_models, other_models, "Opus")
+            if selected and update_model(selected, "opus"):
+                print(f"{GREEN}Set Opus Model to: {selected}{NC}")
+                config = get_current_config()
+
+        elif choice.lower() == 's':
+            selected = select_model_menu(claude_models, gemini_models, other_models, "Sonnet")
+            if selected and update_model(selected, "sonnet"):
+                print(f"{GREEN}Set Sonnet Model to: {selected}{NC}")
+                config = get_current_config()
+
+        elif choice.lower() == 'm':
+            selected = select_model_menu(claude_models, gemini_models, other_models, "Main")
+            if selected and update_model(selected, "main"):
+                print(f"{GREEN}Set Main Model to: {selected}{NC}")
+                config = get_current_config()
+
+        elif choice.lower() == 'a':
+            print("\nAvailable configs: main, haiku, opus, sonnet, all")
+            custom_model = input("Enter model name: ").strip()
+            config_target = input("Set to which config (Enter for all): ").strip().lower()
+            if not config_target:
+                config_target = "all"
+            if custom_model and config_target in ["main", "haiku", "opus", "sonnet", "all"]:
+                if update_model(custom_model, config_target):
+                    print(f"{GREEN}Set to: {custom_model}{NC}")
+                config = get_current_config()
+
+        elif choice.lower() == 'r':
+            if config[0]:
+                if update_model(config[0], "all"):
+                    print(f"{GREEN}Synced all models to main model: {config[0]}{NC}")
+                config = get_current_config()
+            else:
+                print(f"{RED}Main model not set{NC}")
+
+        elif choice.lower() == 'q':
+            print("Goodbye!")
+            break
+
+        else:
+            print(f"{RED}Invalid option{NC}")
+
+        input("\nPress Enter to continue...")
 
 
 if __name__ == "__main__":

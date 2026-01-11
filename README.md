@@ -9,6 +9,8 @@ A CLI tool for quickly switching Claude Code default models. Automatically fetch
 - Two-column display with alphabetical sorting
 - Highlights currently selected model
 - Batch operations to sync all models
+- Environment variable priority: automatically clears `~/.claude/settings.json` to ensure `~/.bashrc` settings take precedence
+- Automatic environment refresh: re-sources `~/.bashrc` immediately after switching models
 
 ## Screenshot
 
@@ -60,11 +62,13 @@ git clone https://github.com/yourusername/claude-model-switch.git
 cd claude-model-switch
 ```
 
-2. Copy the script to your local bin:
+2. Copy the scripts to your local bin:
 
 ```bash
 cp claude-model-switch ~/.local/bin/
+cp claude-model-switch ~/.local/bin/claude-model-list
 chmod +x ~/.local/bin/claude-model-switch
+chmod +x ~/.local/bin/claude-model-list
 ```
 
 3. Make sure `~/.local/bin` is in your PATH. Add to `~/.bashrc` if needed:
@@ -123,6 +127,23 @@ claude-model-switch
 | [3] | Set Opus Model only |
 | [4] | Set Sonnet Model only |
 | [5] | Set All Models |
+
+### Command Line Options
+
+```bash
+claude-model-switch --list     # List all models (JSON format)
+claude-model-switch 3          # Switch to model #3
+claude-model-switch --help     # Show help
+```
+
+## Usage from Claude Code
+
+The first time you run `claude-model-switch`, it automatically installs two tools to `~/.claude/tools`:
+
+- `/model-list` - List all available models with index numbers
+- `/model <number>` - Switch model by index number (run `/model-list` first to see numbers)
+
+Restart Claude Code after first run to use these tools in conversations.
 
 ## Environment Variables
 
