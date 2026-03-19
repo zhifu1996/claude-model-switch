@@ -1,6 +1,8 @@
 #!/bin/bash
 # Claude Model Switch Uninstaller
 
+set -euo pipefail
+
 echo "=========================================="
 echo "      Claude Model Switch Uninstaller"
 echo "=========================================="
@@ -10,6 +12,7 @@ SCRIPT_PATH="$HOME/.local/bin/.claude-model-switch-bin"
 UNINSTALL_SCRIPT="$HOME/.local/bin/claude-model-switch-uninstall"
 TOOLS_DIR="$HOME/.claude/tools"
 BASHRC="$HOME/.bashrc"
+BASH_ALIASES="$HOME/.bash_aliases"
 FUNC_MARKER="# Claude Model Switch - auto refresh env vars after switching"
 
 echo "The following will be removed:"
@@ -29,16 +32,21 @@ if [ -f "$UNINSTALL_SCRIPT" ]; then
 fi
 
 has_func=false
-if grep -q "$FUNC_MARKER" "$BASHRC" 2>/dev/null; then
+if [ -f "$BASHRC" ] && grep -qF "$FUNC_MARKER" "$BASHRC"; then
     has_func=true
 fi
 
-if [ ${#files_to_delete[@]} -eq 0 ] && [ ! -f "$TOOLS_DIR/model-list.json" ] && [ ! -f "$TOOLS_DIR/model.json" ] && [ "$has_func" = false ]; then
+has_alias=false
+if [ -f "$BASH_ALIASES" ] && grep -q "model-switch" "$BASH_ALIASES"; then
+    has_alias=true
+fi
+
+if [ ${#files_to_delete[@]} -eq 0 ] && [ ! -f "$TOOLS_DIR/model-list.json" ] && [ ! -f "$TOOLS_DIR/model.json" ] && [ "$has_func" = false ] && [ "$has_alias" = false ]; then
     echo "No files found to delete."
     exit 0
 fi
 
-read -p "Confirm deletion? (y/n): " confirm
+read -rp "Confirm deletion? (y/n): " confirm
 if [ "$confirm" != "y" ] && [ "$confirm" != "Y" ]; then
     echo "Cancelled."
     exit 0
@@ -61,23 +69,19 @@ fi
 
 # Remove shell function from bashrc
 if [ "$has_func" = true ]; then
-    # Remove function block (from marker line to closing brace)
-    sed -i "/$FUNC_MARKER/,/^}/d" "$BASHRC"
-    # Remove any trailing empty lines that might be left
-    sed -i '/^$/N;/^\n$/d' "$BASHRC"
+    sed -i '/^# Claude Model Switch - auto refresh env vars after switching$/,/^}/d' "$BASHRC"
     echo "Removed shell function 'claude-model-switch' from ~/.bashrc"
 fi
 
-if [ -f "$HOME/.bash_aliases" ]; then
-    if grep -q "model-switch" "$HOME/.bash_aliases"; then
-        echo ""
-        echo "Found related aliases in ~/.bash_aliases:"
-        grep "model-switch" "$HOME/.bash_aliases"
-        read -p "Delete these alias lines? (y/n): " confirm_alias
-        if [ "$confirm_alias" = "y" ] || [ "$confirm_alias" = "Y" ]; then
-            sed -i '/model-switch/d' "$HOME/.bash_aliases"
-            echo "Removed aliases from ~/.bash_aliases."
-        fi
+# Optionally remove related aliases
+if [ "$has_alias" = true ]; then
+    echo ""
+    echo "Found related aliases in ~/.bash_aliases:"
+    grep "model-switch" "$BASH_ALIASES"
+    read -rp "Delete these alias lines? (y/n): " confirm_alias
+    if [ "$confirm_alias" = "y" ] || [ "$confirm_alias" = "Y" ]; then
+        sed -i '/model-switch/d' "$BASH_ALIASES"
+        echo "Removed aliases from ~/.bash_aliases."
     fi
 fi
 
