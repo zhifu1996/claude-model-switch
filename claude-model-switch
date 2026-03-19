@@ -14,13 +14,17 @@ import sys
 import shutil
 
 # Configuration - Set these via environment variables
-API_URL = os.environ.get("ANTHROPIC_BASE_URL", "https://api.example.com")
-API_KEY = os.environ.get("ANTHROPIC_AUTH_TOKEN", "your-api-key-here")
+DEFAULT_API_URL = os.environ.get("ANTHROPIC_BASE_URL", "https://api.example.com")
+DEFAULT_API_KEY = os.environ.get("ANTHROPIC_AUTH_TOKEN", "your-api-key-here")
 CONFIG_FILE = os.path.expanduser("~/.bashrc")
 SETTINGS_FILE = os.path.expanduser("~/.claude/settings.json")
 TOOLS_DIR = os.path.expanduser("~/.claude/tools")
 INSTALL_DIR = os.path.expanduser("~/.local/bin")
 PROJECT_DIR = os.path.dirname(os.path.abspath(__file__))
+
+# Runtime configuration (can be changed during execution)
+API_URL = DEFAULT_API_URL
+API_KEY = DEFAULT_API_KEY
 
 # ANSI color codes
 RED = '\033[0;31m'
@@ -63,27 +67,41 @@ def classify_models(models):
     return claude_models, gemini_models, other_models
 
 
-def get_current_config():
-    """Get current configuration"""
+def read_bashrc_content():
+    """Read ~/.bashrc content safely"""
     if not os.path.exists(CONFIG_FILE):
-        return "", "", "", ""
+        return ""
 
     with open(CONFIG_FILE, 'r') as f:
-        content = f.read()
+        return f.read()
 
-    patterns = {
-        'model': r'ANTHROPIC_MODEL\s*=\s*"?([^"\n]+)"?',
-        'haiku': r'ANTHROPIC_DEFAULT_HAIKU_MODEL\s*=\s*"?([^"\n]+)"?',
-        'opus': r'ANTHROPIC_DEFAULT_OPUS_MODEL\s*=\s*"?([^"\n]+)"?',
-        'sonnet': r'ANTHROPIC_DEFAULT_SONNET_MODEL\s*=\s*"?([^"\n]+)"?',
-    }
 
-    result = {}
-    for key, pattern in patterns.items():
-        match = re.search(pattern, content)
-        result[key] = match.group(1).strip() if match else ""
+def get_export_value(content, var_name):
+    """Get exported env var value from shell config text"""
+    pattern = rf'{re.escape(var_name)}\s*=\s*"?([^"\n]+)"?'
+    match = re.search(pattern, content)
+    return match.group(1).strip() if match else ""
 
-    return result['model'], result['haiku'], result['opus'], result['sonnet']
+
+def get_current_config():
+    """Get current model configuration"""
+    content = read_bashrc_content()
+
+    return (
+        get_export_value(content, 'ANTHROPIC_MODEL'),
+        get_export_value(content, 'ANTHROPIC_DEFAULT_HAIKU_MODEL'),
+        get_export_value(content, 'ANTHROPIC_DEFAULT_OPUS_MODEL'),
+        get_export_value(content, 'ANTHROPIC_DEFAULT_SONNET_MODEL'),
+    )
+
+
+def get_current_endpoint_config():
+    """Get current API base URL and auth token from ~/.bashrc"""
+    content = read_bashrc_content()
+    return (
+        get_export_value(content, 'ANTHROPIC_BASE_URL') or DEFAULT_API_URL,
+        get_export_value(content, 'ANTHROPIC_AUTH_TOKEN') or DEFAULT_API_KEY,
+    )
 
 
 def clear_settings_model():
@@ -208,8 +226,46 @@ def install_claude_tools():
     return True
 
 
+def upsert_export_var(content, var_name, value):
+    """Insert or update export variable in shell config"""
+    pattern = re.compile(rf'^\s*export\s+{re.escape(var_name)}\s*=.*$', re.MULTILINE)
+    new_line = f'export {var_name}="{value}"'
+
+    if pattern.search(content):
+        return pattern.sub(new_line, content)
+
+    if content and not content.endswith('\n'):
+        content += '\n'
+    return content + new_line + '\n'
+
+
+def update_endpoint_config(base_url=None, api_key=None):
+    """Update API endpoint/auth configuration"""
+    if not os.path.exists(CONFIG_FILE):
+        print(f"{RED}Config file not found: {CONFIG_FILE}{NC}")
+        return False
+
+    with open(CONFIG_FILE, 'r') as f:
+        content = f.read()
+
+    if base_url is not None:
+        content = upsert_export_var(content, 'ANTHROPIC_BASE_URL', base_url)
+
+    if api_key is not None:
+        content = upsert_export_var(content, 'ANTHROPIC_AUTH_TOKEN', api_key)
+
+    with open(CONFIG_FILE, 'w') as f:
+        f.write(content)
+
+    refresh_env()
+
+    global API_URL, API_KEY
+    API_URL, API_KEY = get_current_endpoint_config()
+    return True
+
+
 def update_model(model, config_type="all"):
-    """Update configuration"""
+    """Update model configuration"""
     if not os.path.exists(CONFIG_FILE):
         print(f"{RED}Config file not found: {CONFIG_FILE}{NC}")
         return False
@@ -234,10 +290,7 @@ def update_model(model, config_type="all"):
 
     for key in config_map.get(config_type, ['main']):
         var_name, value = updates[key]
-        pattern = rf'^export {var_name}\s*=\s*"?[^"\n]+"?'
-        replacement = f'export {var_name}="{value}"'
-        if re.search(pattern, content, re.MULTILINE):
-            content = re.sub(pattern, replacement, content, flags=re.MULTILINE)
+        content = upsert_export_var(content, var_name, value)
 
     with open(CONFIG_FILE, 'w') as f:
         f.write(content)
@@ -246,6 +299,9 @@ def update_model(model, config_type="all"):
     clear_settings_model()
     # Refresh current process environment
     refresh_env()
+
+    global API_URL, API_KEY
+    API_URL, API_KEY = get_current_endpoint_config()
 
     return True
 
@@ -299,13 +355,16 @@ def print_two_columns(items, current_model, start_idx):
     return start_idx + len(items)
 
 
-def show_menu(claude_models, gemini_models, other_models, config):
+def show_menu(claude_models, gemini_models, other_models, config, endpoint_config):
     """Display menu"""
     print("\n" + GREEN + "=" * 60 + NC)
     print(GREEN + "           Claude Code Model Switch" + NC)
     print(GREEN + "=" * 60 + NC)
     print("")
-    print(f"{YELLOW}API: {API_URL}{NC}")
+    print(f"{YELLOW}Endpoint:{NC}")
+    print(f"  Base URL (ANTHROPIC_BASE_URL):      {endpoint_config[0] or 'Not Set'}")
+    token_display = "***" if endpoint_config[1] else "Not Set"
+    print(f"  Auth Token (ANTHROPIC_AUTH_TOKEN):  {token_display}")
     print("")
     print(f"{YELLOW}Current Configuration:{NC}")
     print(f"  Main Model (ANTHROPIC_MODEL):       {config[0] or 'Not Set'}")
@@ -335,104 +394,15 @@ def show_menu(claude_models, gemini_models, other_models, config):
     print("  [h] Set Haiku Model          [o] Set Opus Model")
     print("  [s] Set Sonnet Model         [m] Set Main Model (ANTHROPIC_MODEL)")
     print("")
+    print(f"{CYAN}--- Endpoint Operations ---{NC}")
+    print("  [b] Set Base URL (ANTHROPIC_BASE_URL)")
+    print("  [k] Set Auth Token (ANTHROPIC_AUTH_TOKEN)")
+    print("")
     print(f"{CYAN}--- Batch Operations ---{NC}")
     print("  [a] Custom model name input")
     print("  [r] Sync all models to main model")
     print("  [q] Quit")
     print("")
-
-
-def main():
-    if not sys.version_info >= (3, 7):
-        print(f"{RED}Python 3.7+ required{NC}")
-        sys.exit(1)
-
-    all_models = fetch_models()
-    if not all_models:
-        print(f"{RED}Failed to fetch models, exiting{NC}")
-        sys.exit(1)
-
-    claude_models, gemini_models, other_models = classify_models(all_models)
-    config = get_current_config()
-
-    print(f"{GREEN}Found {len(all_models)} models{NC}")
-
-    while True:
-        show_menu(claude_models, gemini_models, other_models, config)
-        choice = input("Enter option: ").strip()
-
-        if choice.isdigit() and 1 <= int(choice) <= (len(claude_models) + len(gemini_models) + len(other_models)):
-            idx = int(choice) - 1
-            all_model_list = claude_models + gemini_models + other_models
-            selected_model = all_model_list[idx]
-            print(f"\nSelected model: {selected_model}")
-            print("  [1] Set Main Model (ANTHROPIC_MODEL)")
-            print("  [2] Set Haiku Model")
-            print("  [3] Set Opus Model")
-            print("  [4] Set Sonnet Model")
-            print("  [5] Set All Models")
-            sub_choice = input("Choose: ").strip()
-
-            config_map = {
-                "1": "main", "2": "haiku", "3": "opus", "4": "sonnet", "5": "all"
-            }
-            if sub_choice in config_map:
-                if update_model(selected_model, config_map[sub_choice]):
-                    type_name = {"main": "Main Model", "haiku": "Haiku", "opus": "Opus", "sonnet": "Sonnet", "all": "All Models"}
-                    print(f"{GREEN}Set {type_name[config_map[sub_choice]]} to: {selected_model}{NC}")
-            config = get_current_config()
-
-        elif choice.lower() == 'h':
-            selected = select_model_menu(claude_models, gemini_models, other_models, "Haiku")
-            if selected and update_model(selected, "haiku"):
-                print(f"{GREEN}Set Haiku Model to: {selected}{NC}")
-                config = get_current_config()
-
-        elif choice.lower() == 'o':
-            selected = select_model_menu(claude_models, gemini_models, other_models, "Opus")
-            if selected and update_model(selected, "opus"):
-                print(f"{GREEN}Set Opus Model to: {selected}{NC}")
-                config = get_current_config()
-
-        elif choice.lower() == 's':
-            selected = select_model_menu(claude_models, gemini_models, other_models, "Sonnet")
-            if selected and update_model(selected, "sonnet"):
-                print(f"{GREEN}Set Sonnet Model to: {selected}{NC}")
-                config = get_current_config()
-
-        elif choice.lower() == 'm':
-            selected = select_model_menu(claude_models, gemini_models, other_models, "Main")
-            if selected and update_model(selected, "main"):
-                print(f"{GREEN}Set Main Model to: {selected}{NC}")
-                config = get_current_config()
-
-        elif choice.lower() == 'a':
-            print("\nAvailable configs: main, haiku, opus, sonnet, all")
-            custom_model = input("Enter model name: ").strip()
-            config_target = input("Set to which config (Enter for all): ").strip().lower()
-            if not config_target:
-                config_target = "all"
-            if custom_model and config_target in ["main", "haiku", "opus", "sonnet", "all"]:
-                if update_model(custom_model, config_target):
-                    print(f"{GREEN}Set to: {custom_model}{NC}")
-                config = get_current_config()
-
-        elif choice.lower() == 'r':
-            if config[0]:
-                if update_model(config[0], "all"):
-                    print(f"{GREEN}Synced all models to main model: {config[0]}{NC}")
-                config = get_current_config()
-            else:
-                print(f"{RED}Main model not set{NC}")
-
-        elif choice.lower() == 'q':
-            print("Goodbye!")
-            break
-
-        else:
-            print(f"{RED}Invalid option{NC}")
-
-        input("\nPress Enter to continue...")
 
 
 def select_model_menu(claude_models, gemini_models, other_models, target_name):
@@ -491,15 +461,19 @@ def switch_model_by_index(index):
 
 
 def main():
+    global API_URL, API_KEY
+
     # Check for command line arguments
     if len(sys.argv) > 1:
         arg = sys.argv[1]
 
         if arg in ['--list', '-l', '--list-json']:
+            API_URL, API_KEY = get_current_endpoint_config()
             list_models_json()
             return
 
         if arg.isdigit():
+            API_URL, API_KEY = get_current_endpoint_config()
             switch_model_by_index(arg)
             return
 
@@ -536,6 +510,8 @@ def main():
         install_claude_tools()
         print("")
 
+    API_URL, API_KEY = get_current_endpoint_config()
+
     all_models = fetch_models()
     if not all_models:
         print(f"{RED}Failed to fetch models, exiting{NC}")
@@ -543,11 +519,12 @@ def main():
 
     claude_models, gemini_models, other_models = classify_models(all_models)
     config = get_current_config()
+    endpoint_config = get_current_endpoint_config()
 
     print(f"{GREEN}Found {len(all_models)} models{NC}")
 
     while True:
-        show_menu(claude_models, gemini_models, other_models, config)
+        show_menu(claude_models, gemini_models, other_models, config, endpoint_config)
         choice = input("Enter option: ").strip()
 
         if choice.isdigit() and 1 <= int(choice) <= (len(claude_models) + len(gemini_models) + len(other_models)):
@@ -570,30 +547,69 @@ def main():
                     type_name = {"main": "Main Model", "haiku": "Haiku", "opus": "Opus", "sonnet": "Sonnet", "all": "All Models"}
                     print(f"{GREEN}Set {type_name[config_map[sub_choice]]} to: {selected_model}{NC}")
             config = get_current_config()
+            endpoint_config = get_current_endpoint_config()
 
         elif choice.lower() == 'h':
             selected = select_model_menu(claude_models, gemini_models, other_models, "Haiku")
             if selected and update_model(selected, "haiku"):
                 print(f"{GREEN}Set Haiku Model to: {selected}{NC}")
                 config = get_current_config()
+                endpoint_config = get_current_endpoint_config()
 
         elif choice.lower() == 'o':
             selected = select_model_menu(claude_models, gemini_models, other_models, "Opus")
             if selected and update_model(selected, "opus"):
                 print(f"{GREEN}Set Opus Model to: {selected}{NC}")
                 config = get_current_config()
+                endpoint_config = get_current_endpoint_config()
 
         elif choice.lower() == 's':
             selected = select_model_menu(claude_models, gemini_models, other_models, "Sonnet")
             if selected and update_model(selected, "sonnet"):
                 print(f"{GREEN}Set Sonnet Model to: {selected}{NC}")
                 config = get_current_config()
+                endpoint_config = get_current_endpoint_config()
 
         elif choice.lower() == 'm':
             selected = select_model_menu(claude_models, gemini_models, other_models, "Main")
             if selected and update_model(selected, "main"):
                 print(f"{GREEN}Set Main Model to: {selected}{NC}")
                 config = get_current_config()
+                endpoint_config = get_current_endpoint_config()
+
+        elif choice.lower() == 'b':
+            current_url = endpoint_config[0] or DEFAULT_API_URL
+            print(f"\nCurrent Base URL: {current_url}")
+            new_base_url = input("Enter new Base URL: ").strip()
+            if new_base_url:
+                if update_endpoint_config(base_url=new_base_url):
+                    endpoint_config = get_current_endpoint_config()
+                    API_URL, API_KEY = endpoint_config
+                    print(f"{GREEN}Set Base URL to: {endpoint_config[0]}{NC}")
+                    # Refresh model list under new endpoint
+                    refreshed_models = fetch_models()
+                    if refreshed_models:
+                        claude_models, gemini_models, other_models = classify_models(refreshed_models)
+                        print(f"{GREEN}Refreshed model list from new endpoint ({len(refreshed_models)} models){NC}")
+                    else:
+                        print(f"{YELLOW}Warning: could not fetch models from new endpoint{NC}")
+
+        elif choice.lower() == 'k':
+            has_token = "Yes" if endpoint_config[1] else "No"
+            print(f"\nToken configured: {has_token}")
+            new_api_key = input("Enter new Auth Token: ").strip()
+            if new_api_key:
+                if update_endpoint_config(api_key=new_api_key):
+                    endpoint_config = get_current_endpoint_config()
+                    API_URL, API_KEY = endpoint_config
+                    print(f"{GREEN}Auth token updated{NC}")
+                    # Refresh model list under new auth token
+                    refreshed_models = fetch_models()
+                    if refreshed_models:
+                        claude_models, gemini_models, other_models = classify_models(refreshed_models)
+                        print(f"{GREEN}Refreshed model list with new token ({len(refreshed_models)} models){NC}")
+                    else:
+                        print(f"{YELLOW}Warning: could not fetch models with new token{NC}")
 
         elif choice.lower() == 'a':
             print("\nAvailable configs: main, haiku, opus, sonnet, all")
@@ -605,12 +621,14 @@ def main():
                 if update_model(custom_model, config_target):
                     print(f"{GREEN}Set to: {custom_model}{NC}")
                 config = get_current_config()
+                endpoint_config = get_current_endpoint_config()
 
         elif choice.lower() == 'r':
             if config[0]:
                 if update_model(config[0], "all"):
                     print(f"{GREEN}Synced all models to main model: {config[0]}{NC}")
                 config = get_current_config()
+                endpoint_config = get_current_endpoint_config()
             else:
                 print(f"{RED}Main model not set{NC}")
 
