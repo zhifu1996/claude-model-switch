@@ -9,6 +9,7 @@ A CLI tool for quickly switching Claude Code default models. Automatically fetch
 - Two-column display with alphabetical sorting
 - Highlights currently selected model
 - Batch operations to sync all models
+- Supports updating endpoint settings directly from menu (`ANTHROPIC_BASE_URL` / `ANTHROPIC_AUTH_TOKEN`)
 - Environment variable priority: automatically clears `~/.claude/settings.json` to ensure `~/.bashrc` settings take precedence
 - **Automatic environment variable refresh** - no manual `source ~/.bashrc` needed
 - Script sync/update functionality to keep installed scripts up to date
@@ -20,7 +21,9 @@ A CLI tool for quickly switching Claude Code default models. Automatically fetch
            Claude Code Model Switch
 ============================================================
 
-API: https://api.example.com
+Endpoint:
+  Base URL (ANTHROPIC_BASE_URL):      https://api.example.com
+  Auth Token (ANTHROPIC_AUTH_TOKEN):  ***
 
 Current Configuration:
   Main Model (ANTHROPIC_MODEL):       claude-3-opus
@@ -41,6 +44,10 @@ Current Configuration:
 --- Set Individual Models ---
   [h] Set Haiku Model          [o] Set Opus Model
   [s] Set Sonnet Model         [m] Set Main Model (ANTHROPIC_MODEL)
+
+--- Endpoint Operations ---
+  [b] Set Base URL (ANTHROPIC_BASE_URL)
+  [k] Set Auth Token (ANTHROPIC_AUTH_TOKEN)
 
 --- Batch Operations ---
   [a] Custom model name input
@@ -99,6 +106,8 @@ claude-model-switch
 | [o] | Set Opus model |
 | [s] | Set Sonnet model |
 | [m] | Set Main model (ANTHROPIC_MODEL) |
+| [b] | Set Base URL (ANTHROPIC_BASE_URL) |
+| [k] | Set Auth Token (ANTHROPIC_AUTH_TOKEN) |
 | [a] | Enter custom model name |
 | [r] | Sync all models to the current main model |
 | [q] | Quit |
@@ -146,8 +155,8 @@ Restart Claude Code after first run to use these tools in conversations.
 
 | Variable | Description |
 |----------|-------------|
-| `ANTHROPIC_BASE_URL` | API endpoint URL |
-| `ANTHROPIC_AUTH_TOKEN` | API authentication token |
+| `ANTHROPIC_BASE_URL` | API endpoint URL (can be changed by menu key `[b]`) |
+| `ANTHROPIC_AUTH_TOKEN` | API authentication token (can be changed by menu key `[k]`) |
 | `ANTHROPIC_MODEL` | Main model for Claude Code |
 | `ANTHROPIC_DEFAULT_HAIKU_MODEL` | Haiku-level model |
 | `ANTHROPIC_DEFAULT_OPUS_MODEL` | Opus-level model |
