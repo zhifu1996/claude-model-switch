@@ -2,7 +2,7 @@
 """
 Claude Code Model Switch
 A CLI tool to quickly switch Claude Code default models.
-Automatically fetches available models from CLIProxyAPI.
+Supports multiple API providers with saved profiles.
 """
 
 import json
@@ -12,19 +12,18 @@ import os
 import re
 import sys
 import shutil
+import subprocess
 
-# Configuration - Set these via environment variables
-DEFAULT_API_URL = os.environ.get("ANTHROPIC_BASE_URL", "https://api.example.com")
-DEFAULT_API_KEY = os.environ.get("ANTHROPIC_AUTH_TOKEN", "your-api-key-here")
+# Paths
 CONFIG_FILE = os.path.expanduser("~/.bashrc")
 SETTINGS_FILE = os.path.expanduser("~/.claude/settings.json")
+PROVIDERS_FILE = os.path.expanduser("~/.claude/providers.json")
 TOOLS_DIR = os.path.expanduser("~/.claude/tools")
 INSTALL_DIR = os.path.expanduser("~/.local/bin")
-PROJECT_DIR = os.path.dirname(os.path.abspath(__file__))
 
-# Runtime configuration (can be changed during execution)
-API_URL = DEFAULT_API_URL
-API_KEY = DEFAULT_API_KEY
+# Defaults
+DEFAULT_API_URL = os.environ.get("ANTHROPIC_BASE_URL", "https://api.example.com")
+DEFAULT_API_KEY = os.environ.get("ANTHROPIC_AUTH_TOKEN", "your-api-key-here")
 
 # ANSI color codes
 RED = '\033[0;31m'
@@ -34,23 +33,95 @@ BLUE = '\033[0;34m'
 CYAN = '\033[0;36m'
 NC = '\033[0m'
 
+# Reusable SSL context (skip verification for proxy endpoints)
+_SSL_CTX = ssl.create_default_context()
+_SSL_CTX.check_hostname = False
+_SSL_CTX.verify_mode = ssl.CERT_NONE
 
-def fetch_models():
-    """Fetch available models from API"""
-    print(f"{BLUE}Fetching available models...{NC}")
+# Model env var names
+_MODEL_VARS = {
+    "main":   'ANTHROPIC_MODEL',
+    "haiku":  'ANTHROPIC_DEFAULT_HAIKU_MODEL',
+    "opus":   'ANTHROPIC_DEFAULT_OPUS_MODEL',
+    "sonnet": 'ANTHROPIC_DEFAULT_SONNET_MODEL',
+}
+_ALL_MODEL_VARS = list(_MODEL_VARS.values())
 
-    url = f"{API_URL}/api/provider/claude/v1/models"
-    req = urllib.request.Request(url, headers={
-        'Authorization': f'Bearer {API_KEY}'
-    })
 
-    ctx = ssl.create_default_context()
-    ctx.check_hostname = False
-    ctx.verify_mode = ssl.CERT_NONE
+# ── Provider Management ─────────────────────────────────────────────
 
+def load_providers():
+    """Load provider profiles from ~/.claude/providers.json"""
+    if not os.path.exists(PROVIDERS_FILE):
+        return []
     try:
-        with urllib.request.urlopen(req, timeout=10, context=ctx) as response:
-            data = json.loads(response.read().decode())
+        with open(PROVIDERS_FILE, 'r') as f:
+            return json.load(f).get("providers", [])
+    except (json.JSONDecodeError, IOError):
+        return []
+
+
+def save_providers(providers):
+    """Save provider profiles to ~/.claude/providers.json"""
+    os.makedirs(os.path.dirname(PROVIDERS_FILE), exist_ok=True)
+    with open(PROVIDERS_FILE, 'w') as f:
+        json.dump({"providers": providers}, f, indent=2, ensure_ascii=False)
+
+
+def get_active_provider(providers):
+    """Return the provider marked as active, or None"""
+    for p in providers:
+        if p.get("active"):
+            return p
+    return None
+
+
+def set_active_provider(providers, name):
+    """Mark a provider as active (deactivate all others)"""
+    for p in providers:
+        p["active"] = (p["name"] == name)
+    save_providers(providers)
+
+
+def add_provider(providers, name, base_url, api_key):
+    """Add or overwrite a provider profile"""
+    providers = [p for p in providers if p["name"] != name]
+    providers.append({"name": name, "base_url": base_url, "api_key": api_key, "active": False})
+    save_providers(providers)
+    return providers
+
+
+def remove_provider(providers, name):
+    """Remove a provider profile by name"""
+    providers = [p for p in providers if p["name"] != name]
+    save_providers(providers)
+    return providers
+
+
+def import_current_as_provider(providers):
+    """Import current bashrc endpoint config as a new provider"""
+    url, key = get_current_endpoint_config()
+    if not url or url == "https://api.example.com":
+        print(f"{YELLOW}当前未配置有效的 endpoint，跳过导入{NC}")
+        return providers
+    name = input("为当前配置命名: ").strip()
+    if not name:
+        return providers
+    providers = add_provider(providers, name, url, key)
+    print(f"{GREEN}已导入供应商: {name}{NC}")
+    return providers
+
+
+# ── API / Model Fetch ────────────────────────────────────────────────
+
+def fetch_models(api_url, api_key):
+    """Fetch available models from API"""
+    print(f"{BLUE}Fetching models from {api_url} ...{NC}")
+    url = f"{api_url}/api/provider/claude/v1/models"
+    req = urllib.request.Request(url, headers={'Authorization': f'Bearer {api_key}'})
+    try:
+        with urllib.request.urlopen(req, timeout=10, context=_SSL_CTX) as resp:
+            data = json.loads(resp.read().decode())
             return [m['id'] for m in data.get('data', [])]
     except Exception as e:
         print(f"{RED}Failed to fetch models: {e}{NC}")
@@ -59,86 +130,73 @@ def fetch_models():
 
 def classify_models(models):
     """Classify and sort models alphabetically"""
-    claude_models = sorted([m for m in models if any(x in m.lower() for x in
-        ['claude', 'haiku', 'sonnet', 'opus', 'minimax'])])
-    gemini_models = sorted([m for m in models if 'gemini' in m.lower() and m not in claude_models])
-    other_models = sorted([m for m in models if m not in claude_models and m not in gemini_models])
+    claude_kw = ('claude', 'haiku', 'sonnet', 'opus', 'minimax')
+    claude = sorted(m for m in models if any(k in m.lower() for k in claude_kw))
+    claude_set = set(claude)
+    gemini = sorted(m for m in models if 'gemini' in m.lower() and m not in claude_set)
+    rest = sorted(m for m in models if m not in claude_set and m not in set(gemini))
+    return claude, gemini, rest
 
-    return claude_models, gemini_models, other_models
 
+def fetch_and_sort(api_url, api_key):
+    """Fetch models and return sorted list, or empty list on failure"""
+    raw = fetch_models(api_url, api_key)
+    if not raw:
+        return []
+    c, g, o = classify_models(raw)
+    return c + g + o
+
+
+# ── Bashrc Config Helpers ────────────────────────────────────────────
 
 def read_bashrc_content():
     """Read ~/.bashrc content safely"""
     if not os.path.exists(CONFIG_FILE):
         return ""
-
     with open(CONFIG_FILE, 'r') as f:
         return f.read()
 
 
 def get_export_value(content, var_name):
     """Get exported env var value from shell config text"""
-    pattern = rf'{re.escape(var_name)}\s*=\s*"?([^"\n]+)"?'
-    match = re.search(pattern, content)
+    match = re.search(rf'{re.escape(var_name)}\s*=\s*"?([^"\n]+)"?', content)
     return match.group(1).strip() if match else ""
 
 
-def get_current_config():
-    """Get current model configuration"""
-    content = read_bashrc_content()
+def upsert_export_var(content, var_name, value):
+    """Insert or update export variable in shell config"""
+    pattern = re.compile(rf'^\s*export\s+{re.escape(var_name)}\s*=.*$', re.MULTILINE)
+    new_line = f'export {var_name}="{value}"'
+    if pattern.search(content):
+        return pattern.sub(new_line, content)
+    if content and not content.endswith('\n'):
+        content += '\n'
+    return content + new_line + '\n'
 
-    return (
-        get_export_value(content, 'ANTHROPIC_MODEL'),
-        get_export_value(content, 'ANTHROPIC_DEFAULT_HAIKU_MODEL'),
-        get_export_value(content, 'ANTHROPIC_DEFAULT_OPUS_MODEL'),
-        get_export_value(content, 'ANTHROPIC_DEFAULT_SONNET_MODEL'),
+
+def _read_all_config():
+    """Read bashrc once and return (model_config, endpoint_config)"""
+    content = read_bashrc_content()
+    model_cfg = tuple(get_export_value(content, v) for v in _ALL_MODEL_VARS)
+    endpoint_cfg = (
+        get_export_value(content, 'ANTHROPIC_BASE_URL') or DEFAULT_API_URL,
+        get_export_value(content, 'ANTHROPIC_AUTH_TOKEN') or DEFAULT_API_KEY,
     )
+    return model_cfg, endpoint_cfg
+
+
+def get_current_config():
+    """Get current model configuration tuple"""
+    return _read_all_config()[0]
 
 
 def get_current_endpoint_config():
     """Get current API base URL and auth token from ~/.bashrc"""
-    content = read_bashrc_content()
-    return (
-        get_export_value(content, 'ANTHROPIC_BASE_URL') or DEFAULT_API_URL,
-        get_export_value(content, 'ANTHROPIC_AUTH_TOKEN') or DEFAULT_API_KEY,
-    )
-
-
-def clear_settings_model():
-    """Clear model settings in ~/.claude/settings.json to allow env var priority"""
-    if not os.path.exists(SETTINGS_FILE):
-        return True
-
-    try:
-        with open(SETTINGS_FILE, 'r') as f:
-            content = f.read()
-
-        # Remove or comment out model-related lines
-        patterns = [
-            r'"model"\s*:\s*"[^"]*"',
-            r'"defaultModel"\s*:\s*"[^"]*"',
-        ]
-
-        modified = False
-        for pattern in patterns:
-            if re.search(pattern, content):
-                content = re.sub(pattern, 'null', content)
-                modified = True
-
-        if modified:
-            with open(SETTINGS_FILE, 'w') as f:
-                f.write(content)
-            print(f"{YELLOW}Cleared model config in {SETTINGS_FILE}{NC}")
-
-        return True
-    except Exception as e:
-        print(f"{RED}Failed to clear settings: {e}{NC}")
-        return False
+    return _read_all_config()[1]
 
 
 def refresh_env():
     """Refresh current shell environment by re-sourcing bashrc"""
-    import subprocess
     try:
         result = subprocess.run(
             ['bash', '-c', 'source ~/.bashrc && env | grep ANTHROPIC'],
@@ -153,45 +211,58 @@ def refresh_env():
         print(f"{YELLOW}Could not refresh environment: {e}{NC}")
 
 
-def sync_to_install_dir():
-    """Sync current script and uninstall.sh to ~/.local/bin"""
-    script_path = os.path.abspath(__file__)
-    script_dir = os.path.dirname(script_path)
+def _write_bashrc(content):
+    """Write content to bashrc and refresh env"""
+    with open(CONFIG_FILE, 'w') as f:
+        f.write(content)
+    refresh_env()
 
-    os.makedirs(INSTALL_DIR, exist_ok=True)
 
-    # Copy main script as hidden file
-    dest_script = os.path.join(INSTALL_DIR, ".claude-model-switch-bin")
-    shutil.copy2(script_path, dest_script)
-    os.chmod(dest_script, 0o755)
-    print(f"{GREEN}Updated: {dest_script}{NC}")
+def clear_settings_model():
+    """Clear model settings in ~/.claude/settings.json to allow env var priority"""
+    if not os.path.exists(SETTINGS_FILE):
+        return
+    try:
+        with open(SETTINGS_FILE, 'r') as f:
+            content = f.read()
+        new_content = re.sub(r'"(?:model|defaultModel)"\s*:\s*"[^"]*"', 'null', content)
+        if new_content != content:
+            with open(SETTINGS_FILE, 'w') as f:
+                f.write(new_content)
+            print(f"{YELLOW}Cleared model config in {SETTINGS_FILE}{NC}")
+    except Exception as e:
+        print(f"{RED}Failed to clear settings: {e}{NC}")
 
-    # Copy uninstall script if exists
-    uninstall_src = os.path.join(script_dir, "uninstall.sh")
-    if os.path.exists(uninstall_src):
-        uninstall_dest = os.path.join(INSTALL_DIR, "claude-model-switch-uninstall")
-        shutil.copy2(uninstall_src, uninstall_dest)
-        os.chmod(uninstall_dest, 0o755)
-        print(f"{GREEN}Updated: {uninstall_dest}{NC}")
 
-    # Update Claude Code tools (regenerate with new paths)
-    install_claude_tools()
+# ── Write Config ─────────────────────────────────────────────────────
 
-    print(f"\n{GREEN}Sync complete!{NC}")
+def update_endpoint_config(base_url=None, api_key=None):
+    """Update API endpoint/auth in bashrc and refresh env"""
+    content = read_bashrc_content()
+    if base_url is not None:
+        content = upsert_export_var(content, 'ANTHROPIC_BASE_URL', base_url)
+    if api_key is not None:
+        content = upsert_export_var(content, 'ANTHROPIC_AUTH_TOKEN', api_key)
+    _write_bashrc(content)
+
+
+def update_model(model, config_type="all"):
+    """Update model configuration in bashrc"""
+    content = read_bashrc_content()
+    var_names = _ALL_MODEL_VARS if config_type == "all" else [_MODEL_VARS.get(config_type, 'ANTHROPIC_MODEL')]
+    for var in var_names:
+        content = upsert_export_var(content, var, model)
+    _write_bashrc(content)
+    clear_settings_model()
     return True
 
 
+# ── Sync / Install ───────────────────────────────────────────────────
+
 def install_claude_tools():
-    """Install Claude Code tools configuration to ~/.claude/tools"""
-    # Get the path to the script
+    """Install Claude Code tools configuration"""
     script_path = os.path.abspath(sys.argv[0])
-    if script_path.endswith('/'):
-        script_path = script_path[:-1]
-
-    # Create tools directory if it doesn't exist
     os.makedirs(TOOLS_DIR, exist_ok=True)
-
-    # Tool definitions
     tools = {
         "model-list.json": {
             "name": "model-list",
@@ -203,112 +274,51 @@ def install_claude_tools():
             "description": "Switch model by index number",
             "parameters": {
                 "type": "object",
-                "properties": {
-                    "index": {"type": "integer", "description": "Model index number (see /model-list)"}
-                },
+                "properties": {"index": {"type": "integer", "description": "Model index number (see /model-list)"}},
                 "required": ["index"]
             },
             "command": ["bash", "-c", f"{script_path} ${{index}}"]
         }
     }
-
-    installed = []
     for filename, tool in tools.items():
-        filepath = os.path.join(TOOLS_DIR, filename)
-        with open(filepath, 'w') as f:
+        with open(os.path.join(TOOLS_DIR, filename), 'w') as f:
             json.dump(tool, f, indent=2)
-        installed.append(filepath)
-
-    print(f"{GREEN}Installed {len(installed)} Claude Code tools:{NC}")
-    for path in installed:
-        print(f"  - {path}")
+    print(f"{GREEN}Installed {len(tools)} Claude Code tools{NC}")
     print(f"{YELLOW}Please restart Claude Code to use the new tools.{NC}")
-    return True
 
 
-def upsert_export_var(content, var_name, value):
-    """Insert or update export variable in shell config"""
-    pattern = re.compile(rf'^\s*export\s+{re.escape(var_name)}\s*=.*$', re.MULTILINE)
-    new_line = f'export {var_name}="{value}"'
+def sync_to_install_dir():
+    """Sync current script and uninstall.sh to ~/.local/bin"""
+    script_path = os.path.abspath(__file__)
+    script_dir = os.path.dirname(script_path)
+    os.makedirs(INSTALL_DIR, exist_ok=True)
 
-    if pattern.search(content):
-        return pattern.sub(new_line, content)
+    dest = os.path.join(INSTALL_DIR, ".claude-model-switch-bin")
+    shutil.copy2(script_path, dest)
+    os.chmod(dest, 0o755)
+    print(f"{GREEN}Updated: {dest}{NC}")
 
-    if content and not content.endswith('\n'):
-        content += '\n'
-    return content + new_line + '\n'
+    uninstall_src = os.path.join(script_dir, "uninstall.sh")
+    if os.path.exists(uninstall_src):
+        uninstall_dest = os.path.join(INSTALL_DIR, "claude-model-switch-uninstall")
+        shutil.copy2(uninstall_src, uninstall_dest)
+        os.chmod(uninstall_dest, 0o755)
+        print(f"{GREEN}Updated: {uninstall_dest}{NC}")
 
-
-def update_endpoint_config(base_url=None, api_key=None):
-    """Update API endpoint/auth configuration"""
-    if not os.path.exists(CONFIG_FILE):
-        print(f"{RED}Config file not found: {CONFIG_FILE}{NC}")
-        return False
-
-    with open(CONFIG_FILE, 'r') as f:
-        content = f.read()
-
-    if base_url is not None:
-        content = upsert_export_var(content, 'ANTHROPIC_BASE_URL', base_url)
-
-    if api_key is not None:
-        content = upsert_export_var(content, 'ANTHROPIC_AUTH_TOKEN', api_key)
-
-    with open(CONFIG_FILE, 'w') as f:
-        f.write(content)
-
-    refresh_env()
-
-    global API_URL, API_KEY
-    API_URL, API_KEY = get_current_endpoint_config()
-    return True
+    install_claude_tools()
+    print(f"\n{GREEN}Sync complete!{NC}")
 
 
-def update_model(model, config_type="all"):
-    """Update model configuration"""
-    if not os.path.exists(CONFIG_FILE):
-        print(f"{RED}Config file not found: {CONFIG_FILE}{NC}")
-        return False
-
-    with open(CONFIG_FILE, 'r') as f:
-        content = f.read()
-
-    updates = {
-        'main': ('ANTHROPIC_MODEL', model),
-        'haiku': ('ANTHROPIC_DEFAULT_HAIKU_MODEL', model),
-        'opus': ('ANTHROPIC_DEFAULT_OPUS_MODEL', model),
-        'sonnet': ('ANTHROPIC_DEFAULT_SONNET_MODEL', model),
-    }
-
-    config_map = {
-        "all": ['main', 'haiku', 'opus', 'sonnet'],
-        "main": ['main'],
-        "haiku": ['haiku'],
-        "opus": ['opus'],
-        "sonnet": ['sonnet'],
-    }
-
-    for key in config_map.get(config_type, ['main']):
-        var_name, value = updates[key]
-        content = upsert_export_var(content, var_name, value)
-
-    with open(CONFIG_FILE, 'w') as f:
-        f.write(content)
-
-    # Clear settings.json to ensure env var priority
-    clear_settings_model()
-    # Refresh current process environment
-    refresh_env()
-
-    global API_URL, API_KEY
-    API_URL, API_KEY = get_current_endpoint_config()
-
-    return True
-
+# ── Display ──────────────────────────────────────────────────────────
 
 def strip_ansi(text):
     """Remove ANSI escape codes"""
     return re.sub(r'\x1B\[[0-9;]*[mK]', '', text)
+
+
+def _format_item(num, name, selected):
+    """Format a single model list item"""
+    return f"{GREEN}{num}. {name} *{NC}" if selected else f"{num}. {name}"
 
 
 def print_two_columns(items, current_model, start_idx):
@@ -316,99 +326,73 @@ def print_two_columns(items, current_model, start_idx):
     if not items:
         return start_idx
 
-    # Calculate column width dynamically
-    max_len = 0
-    for i, item in enumerate(items):
-        num = start_idx + i
-        item_str = f"{num}. {item}"
-        max_len = max(max_len, len(item_str))
-
-    col_width = max_len + 4
+    col_width = max(len(f"{start_idx + i}. {item}") for i, item in enumerate(items)) + 4
     rows = (len(items) + 1) // 2
 
     for i in range(rows):
-        left_idx = i
-        right_idx = i + rows if i + rows < len(items) else None
-
-        left = items[left_idx]
-        left_is_selected = (left == current_model)
-        if left_is_selected:
-            left_str = f"{GREEN}{start_idx + left_idx}. {left} *{NC}"
-        else:
-            left_str = f"{start_idx + left_idx}. {left}"
-
-        if right_idx is not None:
-            right = items[right_idx]
-            right_is_selected = (right == current_model)
-            if right_is_selected:
-                right_str = f"{GREEN}{start_idx + right_idx}. {right} *{NC}"
-            else:
-                right_str = f"{start_idx + right_idx}. {right}"
-            # Pad with spaces to align, preserving color
+        left_str = _format_item(start_idx + i, items[i], items[i] == current_model)
+        right_idx = i + rows
+        if right_idx < len(items):
+            right_str = _format_item(start_idx + right_idx, items[right_idx], items[right_idx] == current_model)
             print(left_str + " " * (col_width - len(strip_ansi(left_str))) + right_str)
         else:
-            if left_is_selected:
-                print(f"{GREEN}{start_idx + left_idx}. {left} *{NC}")
-            else:
-                print(left_str)
+            print(left_str)
 
     return start_idx + len(items)
 
 
-def show_menu(claude_models, gemini_models, other_models, config, endpoint_config):
-    """Display menu"""
+def show_menu(classified, config, endpoint_config, providers):
+    """Display main menu"""
+    active_provider = get_active_provider(providers)
+    provider_name = active_provider["name"] if active_provider else "无 (手动配置)"
+
     print("\n" + GREEN + "=" * 60 + NC)
     print(GREEN + "           Claude Code Model Switch" + NC)
     print(GREEN + "=" * 60 + NC)
     print("")
-    print(f"{YELLOW}Endpoint:{NC}")
-    print(f"  Base URL (ANTHROPIC_BASE_URL):      {endpoint_config[0] or 'Not Set'}")
-    token_display = "***" if endpoint_config[1] else "Not Set"
-    print(f"  Auth Token (ANTHROPIC_AUTH_TOKEN):  {token_display}")
+    print(f"{YELLOW}当前供应商:{NC} {CYAN}{provider_name}{NC}")
+    print(f"  Base URL:   {endpoint_config[0] or 'Not Set'}")
+    print(f"  Auth Token: {'***' if endpoint_config[1] else 'Not Set'}")
+    if providers:
+        names = [f"{CYAN}{p['name']}{NC}" if p.get("active") else p["name"] for p in providers]
+        print(f"  已保存供应商: {', '.join(names)}")
     print("")
     print(f"{YELLOW}Current Configuration:{NC}")
-    print(f"  Main Model (ANTHROPIC_MODEL):       {config[0] or 'Not Set'}")
-    print(f"  Haiku Model:                        {config[1] or 'Not Set'}")
-    print(f"  Opus Model:                         {config[2] or 'Not Set'}")
-    print(f"  Sonnet Model:                       {config[3] or 'Not Set'}")
+    print(f"  Main Model (ANTHROPIC_MODEL):  {config[0] or 'Not Set'}")
+    print(f"  Haiku Model:                   {config[1] or 'Not Set'}")
+    print(f"  Opus Model:                    {config[2] or 'Not Set'}")
+    print(f"  Sonnet Model:                  {config[3] or 'Not Set'}")
     print("")
 
+    categories = [
+        ("Claude/Minimax Compatible", classified[0]),
+        ("Google Gemini Models", classified[1]),
+        ("Other Models", classified[2]),
+    ]
     idx = 1
+    for label, models in categories:
+        if models:
+            print(f"{BLUE}--- {label} ({len(models)}) ---{NC}")
+            idx = print_two_columns(models, config[0], idx)
+            print("")
 
-    if claude_models:
-        print(f"{BLUE}--- Claude/Minimax Compatible ({len(claude_models)}) ---{NC}")
-        idx = print_two_columns(claude_models, config[0], idx)
-        print("")
-
-    if gemini_models:
-        print(f"{BLUE}--- Google Gemini Models ({len(gemini_models)}) ---{NC}")
-        idx = print_two_columns(gemini_models, config[0], idx)
-        print("")
-
-    if other_models:
-        print(f"{BLUE}--- Other Models ({len(other_models)}) ---{NC}")
-        idx = print_two_columns(other_models, config[0], idx)
-        print("")
-
-    print(f"{CYAN}--- Set Individual Models ---{NC}")
-    print("  [h] Set Haiku Model          [o] Set Opus Model")
-    print("  [s] Set Sonnet Model         [m] Set Main Model (ANTHROPIC_MODEL)")
+    print(f"{CYAN}--- 模型设置 ---{NC}")
+    print("  [h] Set Haiku    [o] Set Opus    [s] Set Sonnet    [m] Set Main")
+    print("  [a] 自定义模型名  [r] 同步所有模型为 Main")
     print("")
-    print(f"{CYAN}--- Endpoint Operations ---{NC}")
-    print("  [b] Set Base URL (ANTHROPIC_BASE_URL)")
-    print("  [k] Set Auth Token (ANTHROPIC_AUTH_TOKEN)")
+    print(f"{CYAN}--- 供应商管理 ---{NC}")
+    print("  [p] 切换供应商    [+] 添加供应商   [-] 删除供应商")
+    print("  [b] 修改 Base URL [k] 修改 Auth Token")
     print("")
-    print(f"{CYAN}--- Batch Operations ---{NC}")
-    print("  [a] Custom model name input")
-    print("  [r] Sync all models to main model")
-    print("  [q] Quit")
+    print("  [q] 退出")
     print("")
 
 
-def select_model_menu(claude_models, gemini_models, other_models, target_name):
-    """Model selection submenu"""
+# ── Interactive Menus ────────────────────────────────────────────────
+
+def select_model_menu(all_models, target_name):
+    """Model selection submenu, returns selected model or None"""
     print(f"\n{target_name} Model Selection:")
-    all_models = claude_models + gemini_models + other_models
     for idx, model in enumerate(all_models, 1):
         print(f"  {idx}. {model}")
     print("  [q] Back")
@@ -418,73 +402,141 @@ def select_model_menu(claude_models, gemini_models, other_models, target_name):
     return None
 
 
+def provider_switch_menu(providers):
+    """Show provider switching menu. Returns (providers, new_models_or_None)."""
+    if not providers:
+        print(f"{YELLOW}尚未保存任何供应商，请先添加{NC}")
+        return providers, None
+
+    prev_active = get_active_provider(providers)
+
+    print(f"\n{CYAN}选择供应商:{NC}")
+    for i, p in enumerate(providers, 1):
+        marker = f" {GREEN}← 当前{NC}" if p.get("active") else ""
+        print(f"  {i}. {p['name']} ({p['base_url']}){marker}")
+    print("  [q] 返回")
+
+    choice = input("选择: ").strip()
+    if not (choice.isdigit() and 1 <= int(choice) <= len(providers)):
+        return providers, None
+
+    selected = providers[int(choice) - 1]
+
+    # Verify connectivity BEFORE writing config
+    models = fetch_models(selected["base_url"], selected["api_key"])
+    if not models:
+        print(f"{RED}无法从 {selected['name']} 获取模型列表，未切换{NC}")
+        if prev_active:
+            print(f"{YELLOW}保持当前供应商: {prev_active['name']}{NC}")
+        return providers, None
+
+    # Verified OK — now apply
+    set_active_provider(providers, selected["name"])
+    update_endpoint_config(base_url=selected["base_url"], api_key=selected["api_key"])
+    print(f"{GREEN}已切换到: {selected['name']} ({selected['base_url']}){NC}")
+    return providers, models
+
+
+def provider_add_menu(providers):
+    """Interactive menu to add a new provider. Returns (providers, new_models_or_None)."""
+    print(f"\n{CYAN}添加新供应商:{NC}")
+    name = input("  供应商名称: ").strip()
+    if not name:
+        return providers, None
+    base_url = input("  Base URL: ").strip()
+    if not base_url:
+        return providers, None
+    api_key = input("  Auth Token: ").strip()
+    if not api_key:
+        return providers, None
+
+    providers = add_provider(providers, name, base_url, api_key)
+    print(f"{GREEN}已添加供应商: {name}{NC}")
+
+    activate = input("是否立即切换到此供应商? [Y/n]: ").strip().lower()
+    if activate == 'n':
+        return providers, None
+
+    # Verify before switching
+    models = fetch_models(base_url, api_key)
+    if not models:
+        print(f"{RED}无法从 {name} 获取模型列表，未切换{NC}")
+        return providers, None
+
+    set_active_provider(providers, name)
+    update_endpoint_config(base_url=base_url, api_key=api_key)
+    print(f"{GREEN}已切换到: {name}{NC}")
+    return providers, models
+
+
+def provider_remove_menu(providers):
+    """Interactive menu to remove a provider"""
+    if not providers:
+        print(f"{YELLOW}没有已保存的供应商{NC}")
+        return providers
+
+    print(f"\n{CYAN}删除供应商:{NC}")
+    for i, p in enumerate(providers, 1):
+        print(f"  {i}. {p['name']} ({p['base_url']})")
+    print("  [q] 返回")
+
+    choice = input("选择要删除的供应商: ").strip()
+    if choice.isdigit() and 1 <= int(choice) <= len(providers):
+        removed = providers[int(choice) - 1]
+        providers = remove_provider(providers, removed["name"])
+        print(f"{GREEN}已删除: {removed['name']}{NC}")
+    return providers
+
+
+# ── CLI (non-interactive) ────────────────────────────────────────────
+
 def list_models_json():
     """List all models in JSON format for Claude Code tools"""
-    all_models = fetch_models()
-    if not all_models:
+    sorted_models = fetch_and_sort(*get_current_endpoint_config())
+    if not sorted_models:
         print('{"error": "Failed to fetch models"}')
         return
-
-    # Use same sorting as interactive mode
-    claude_models, gemini_models, other_models = classify_models(all_models)
-    sorted_models = claude_models + gemini_models + other_models
-    result = {"models": [{"id": m} for m in sorted_models]}
-    print(json.dumps(result))
+    print(json.dumps({"models": [{"id": m} for m in sorted_models]}))
 
 
 def switch_model_by_index(index):
-    """Switch model by index number"""
-    all_models = fetch_models()
-    if not all_models:
-        print(f'{{"error": "Failed to fetch models"}}')
+    """Switch model by index number (CLI mode)"""
+    sorted_models = fetch_and_sort(*get_current_endpoint_config())
+    if not sorted_models:
+        print('{"error": "Failed to fetch models"}')
         return
-
-    # Use same sorting as interactive mode
-    claude_models, gemini_models, other_models = classify_models(all_models)
-    sorted_models = claude_models + gemini_models + other_models
-
     try:
         idx = int(index)
         if idx < 1 or idx > len(sorted_models):
             print(f'{{"error": "Invalid index. Available range: 1-{len(sorted_models)}"}}')
             return
-
-        selected_model = sorted_models[idx - 1]
-        if update_model(selected_model, "all"):
-            print(json.dumps({
-                "success": True,
-                "model": selected_model,
-                "message": f"Model switched to {selected_model}. Please restart Claude Code to apply changes."
-            }))
+        selected = sorted_models[idx - 1]
+        update_model(selected, "all")
+        print(json.dumps({
+            "success": True, "model": selected,
+            "message": f"Model switched to {selected}. Please restart Claude Code."
+        }))
     except ValueError:
         print('{"error": "Invalid index. Please provide a number."}')
 
 
-def main():
-    global API_URL, API_KEY
+# ── Main ─────────────────────────────────────────────────────────────
 
-    # Check for command line arguments
+def main():
+    # CLI arguments
     if len(sys.argv) > 1:
         arg = sys.argv[1]
-
-        if arg in ['--list', '-l', '--list-json']:
-            API_URL, API_KEY = get_current_endpoint_config()
+        if arg in ('--list', '-l', '--list-json'):
             list_models_json()
             return
-
         if arg.isdigit():
-            API_URL, API_KEY = get_current_endpoint_config()
             switch_model_by_index(arg)
             return
-
-        # Update/sync to install directory
-        if arg in ['--update', '-u', '--sync']:
+        if arg in ('--update', '-u', '--sync'):
             print(f"{BLUE}Syncing scripts to {INSTALL_DIR}...{NC}")
             sync_to_install_dir()
             return
-
-        # Help
-        if arg in ['--help', '-h']:
+        if arg in ('--help', '-h'):
             print("Usage: claude-model-switch [OPTIONS] [INDEX]")
             print("")
             print("Options:")
@@ -494,141 +546,146 @@ def main():
             print("  -h, --help         Show this help message")
             print("")
             print("For auto environment refresh, use 'model-switch' wrapper")
-            print("(installed via install.sh)")
             return
 
     # Interactive mode
-    if not sys.version_info >= (3, 7):
+    if sys.version_info < (3, 7):
         print(f"{RED}Python 3.7+ required{NC}")
         sys.exit(1)
 
     # Auto-install Claude Code tools if not present
-    model_list_tool = os.path.join(TOOLS_DIR, "model-list.json")
-    model_tool = os.path.join(TOOLS_DIR, "model.json")
-    if not (os.path.exists(model_list_tool) and os.path.exists(model_tool)):
+    if not (os.path.exists(os.path.join(TOOLS_DIR, "model-list.json"))
+            and os.path.exists(os.path.join(TOOLS_DIR, "model.json"))):
         print(f"{YELLOW}Installing Claude Code tools...{NC}")
         install_claude_tools()
         print("")
 
-    API_URL, API_KEY = get_current_endpoint_config()
+    # Load providers and resolve active endpoint
+    providers = load_providers()
+    active = get_active_provider(providers)
+    if active:
+        api_url, api_key = active["base_url"], active["api_key"]
+        update_endpoint_config(base_url=api_url, api_key=api_key)
+    else:
+        api_url, api_key = get_current_endpoint_config()
+        if not providers and api_url and api_url != "https://api.example.com":
+            print(f"{YELLOW}检测到已有 endpoint 配置，是否保存为供应商?{NC}")
+            if input("[Y/n]: ").strip().lower() != 'n':
+                providers = import_current_as_provider(providers)
+                if providers:
+                    set_active_provider(providers, providers[-1]["name"])
 
-    all_models = fetch_models()
+    all_models = fetch_models(api_url, api_key)
+
+    # Fallback: if active provider fails, try others
+    if not all_models and providers:
+        active_name = active["name"] if active else None
+        for p in providers:
+            if p["name"] == active_name:
+                continue
+            print(f"{YELLOW}尝试 fallback 到供应商: {p['name']} ...{NC}")
+            all_models = fetch_models(p["base_url"], p["api_key"])
+            if all_models:
+                set_active_provider(providers, p["name"])
+                update_endpoint_config(base_url=p["base_url"], api_key=p["api_key"])
+                print(f"{GREEN}已 fallback 到: {p['name']}{NC}")
+                break
+
     if not all_models:
-        print(f"{RED}Failed to fetch models, exiting{NC}")
+        print(f"{RED}所有供应商均无法获取模型列表，退出{NC}")
         sys.exit(1)
 
-    claude_models, gemini_models, other_models = classify_models(all_models)
-    config = get_current_config()
-    endpoint_config = get_current_endpoint_config()
-
+    classified = classify_models(all_models)
     print(f"{GREEN}Found {len(all_models)} models{NC}")
 
+    def apply_models(raw_models):
+        """Classify and replace the current model lists"""
+        nonlocal classified, all_models
+        all_models = raw_models
+        classified = classify_models(raw_models)
+        print(f"{GREEN}已刷新模型列表 ({len(raw_models)} models){NC}")
+
+    def reload_models(prev_url=None, prev_key=None):
+        """Re-fetch models from current endpoint. Rollback on failure if prev given."""
+        url, key = get_current_endpoint_config()
+        refreshed = fetch_models(url, key)
+        if refreshed:
+            apply_models(refreshed)
+            return True
+        print(f"{YELLOW}Warning: could not fetch models{NC}")
+        if prev_url is not None:
+            print(f"{YELLOW}回滚到之前的 endpoint 配置{NC}")
+            update_endpoint_config(base_url=prev_url, api_key=prev_key)
+        return False
+
+    config, endpoint_config = _read_all_config()
+    all_list = classified[0] + classified[1] + classified[2]
+
     while True:
-        show_menu(claude_models, gemini_models, other_models, config, endpoint_config)
+        show_menu(classified, config, endpoint_config, providers)
         choice = input("Enter option: ").strip()
 
-        if choice.isdigit() and 1 <= int(choice) <= (len(claude_models) + len(gemini_models) + len(other_models)):
-            idx = int(choice) - 1
-            all_model_list = claude_models + gemini_models + other_models
-            selected_model = all_model_list[idx]
-            print(f"\nSelected model: {selected_model}")
-            print("  [1] Set Main Model (ANTHROPIC_MODEL)")
-            print("  [2] Set Haiku Model")
-            print("  [3] Set Opus Model")
-            print("  [4] Set Sonnet Model")
-            print("  [5] Set All Models")
-            sub_choice = input("Choose: ").strip()
+        if choice.isdigit() and 1 <= int(choice) <= len(all_list):
+            selected = all_list[int(choice) - 1]
+            print(f"\nSelected model: {selected}")
+            print("  [1] Set Main   [2] Set Haiku   [3] Set Opus   [4] Set Sonnet   [5] Set All")
+            sub = input("Choose: ").strip()
+            type_map = {"1": "main", "2": "haiku", "3": "opus", "4": "sonnet", "5": "all"}
+            if sub in type_map:
+                update_model(selected, type_map[sub])
+                label = {"main": "Main", "haiku": "Haiku", "opus": "Opus", "sonnet": "Sonnet", "all": "All"}
+                print(f"{GREEN}Set {label[type_map[sub]]} to: {selected}{NC}")
 
-            config_map = {
-                "1": "main", "2": "haiku", "3": "opus", "4": "sonnet", "5": "all"
-            }
-            if sub_choice in config_map:
-                if update_model(selected_model, config_map[sub_choice]):
-                    type_name = {"main": "Main Model", "haiku": "Haiku", "opus": "Opus", "sonnet": "Sonnet", "all": "All Models"}
-                    print(f"{GREEN}Set {type_name[config_map[sub_choice]]} to: {selected_model}{NC}")
-            config = get_current_config()
-            endpoint_config = get_current_endpoint_config()
+        elif choice.lower() in ('h', 'o', 's', 'm'):
+            role = {'h': 'haiku', 'o': 'opus', 's': 'sonnet', 'm': 'main'}[choice.lower()]
+            selected = select_model_menu(all_list, role.capitalize())
+            if selected:
+                update_model(selected, role)
+                print(f"{GREEN}Set {role.capitalize()} Model to: {selected}{NC}")
 
-        elif choice.lower() == 'h':
-            selected = select_model_menu(claude_models, gemini_models, other_models, "Haiku")
-            if selected and update_model(selected, "haiku"):
-                print(f"{GREEN}Set Haiku Model to: {selected}{NC}")
-                config = get_current_config()
-                endpoint_config = get_current_endpoint_config()
+        elif choice == 'p':
+            providers, new_models = provider_switch_menu(providers)
+            if new_models:
+                apply_models(new_models)
 
-        elif choice.lower() == 'o':
-            selected = select_model_menu(claude_models, gemini_models, other_models, "Opus")
-            if selected and update_model(selected, "opus"):
-                print(f"{GREEN}Set Opus Model to: {selected}{NC}")
-                config = get_current_config()
-                endpoint_config = get_current_endpoint_config()
+        elif choice == '+':
+            providers, new_models = provider_add_menu(providers)
+            if new_models:
+                apply_models(new_models)
 
-        elif choice.lower() == 's':
-            selected = select_model_menu(claude_models, gemini_models, other_models, "Sonnet")
-            if selected and update_model(selected, "sonnet"):
-                print(f"{GREEN}Set Sonnet Model to: {selected}{NC}")
-                config = get_current_config()
-                endpoint_config = get_current_endpoint_config()
-
-        elif choice.lower() == 'm':
-            selected = select_model_menu(claude_models, gemini_models, other_models, "Main")
-            if selected and update_model(selected, "main"):
-                print(f"{GREEN}Set Main Model to: {selected}{NC}")
-                config = get_current_config()
-                endpoint_config = get_current_endpoint_config()
+        elif choice == '-':
+            providers = provider_remove_menu(providers)
 
         elif choice.lower() == 'b':
-            current_url = endpoint_config[0] or DEFAULT_API_URL
-            print(f"\nCurrent Base URL: {current_url}")
-            new_base_url = input("Enter new Base URL: ").strip()
-            if new_base_url:
-                if update_endpoint_config(base_url=new_base_url):
-                    endpoint_config = get_current_endpoint_config()
-                    API_URL, API_KEY = endpoint_config
-                    print(f"{GREEN}Set Base URL to: {endpoint_config[0]}{NC}")
-                    # Refresh model list under new endpoint
-                    refreshed_models = fetch_models()
-                    if refreshed_models:
-                        claude_models, gemini_models, other_models = classify_models(refreshed_models)
-                        print(f"{GREEN}Refreshed model list from new endpoint ({len(refreshed_models)} models){NC}")
-                    else:
-                        print(f"{YELLOW}Warning: could not fetch models from new endpoint{NC}")
+            cur_url, cur_key = endpoint_config
+            print(f"\nCurrent Base URL: {cur_url or DEFAULT_API_URL}")
+            new_url = input("Enter new Base URL: ").strip()
+            if new_url:
+                update_endpoint_config(base_url=new_url)
+                print(f"{GREEN}Set Base URL to: {new_url}{NC}")
+                reload_models(prev_url=cur_url, prev_key=cur_key)
 
         elif choice.lower() == 'k':
-            has_token = "Yes" if endpoint_config[1] else "No"
-            print(f"\nToken configured: {has_token}")
-            new_api_key = input("Enter new Auth Token: ").strip()
-            if new_api_key:
-                if update_endpoint_config(api_key=new_api_key):
-                    endpoint_config = get_current_endpoint_config()
-                    API_URL, API_KEY = endpoint_config
-                    print(f"{GREEN}Auth token updated{NC}")
-                    # Refresh model list under new auth token
-                    refreshed_models = fetch_models()
-                    if refreshed_models:
-                        claude_models, gemini_models, other_models = classify_models(refreshed_models)
-                        print(f"{GREEN}Refreshed model list with new token ({len(refreshed_models)} models){NC}")
-                    else:
-                        print(f"{YELLOW}Warning: could not fetch models with new token{NC}")
+            cur_url, cur_key = endpoint_config
+            print(f"\nToken configured: {'Yes' if cur_key else 'No'}")
+            new_key = input("Enter new Auth Token: ").strip()
+            if new_key:
+                update_endpoint_config(api_key=new_key)
+                print(f"{GREEN}Auth token updated{NC}")
+                reload_models(prev_url=cur_url, prev_key=cur_key)
 
         elif choice.lower() == 'a':
             print("\nAvailable configs: main, haiku, opus, sonnet, all")
-            custom_model = input("Enter model name: ").strip()
-            config_target = input("Set to which config (Enter for all): ").strip().lower()
-            if not config_target:
-                config_target = "all"
-            if custom_model and config_target in ["main", "haiku", "opus", "sonnet", "all"]:
-                if update_model(custom_model, config_target):
-                    print(f"{GREEN}Set to: {custom_model}{NC}")
-                config = get_current_config()
-                endpoint_config = get_current_endpoint_config()
+            custom = input("Enter model name: ").strip()
+            target = input("Set to which config (Enter for all): ").strip().lower() or "all"
+            if custom and target in ("main", "haiku", "opus", "sonnet", "all"):
+                update_model(custom, target)
+                print(f"{GREEN}Set to: {custom}{NC}")
 
         elif choice.lower() == 'r':
             if config[0]:
-                if update_model(config[0], "all"):
-                    print(f"{GREEN}Synced all models to main model: {config[0]}{NC}")
-                config = get_current_config()
-                endpoint_config = get_current_endpoint_config()
+                update_model(config[0], "all")
+                print(f"{GREEN}Synced all models to: {config[0]}{NC}")
             else:
                 print(f"{RED}Main model not set{NC}")
 
@@ -639,6 +696,8 @@ def main():
         else:
             print(f"{RED}Invalid option{NC}")
 
+        config, endpoint_config = _read_all_config()
+        all_list = classified[0] + classified[1] + classified[2]
         input("\nPress Enter to continue...")
 
 
