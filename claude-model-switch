@@ -102,13 +102,13 @@ def import_current_as_provider(providers):
     """Import current bashrc endpoint config as a new provider"""
     url, key = get_current_endpoint_config()
     if not url or url == "https://api.example.com":
-        print(f"{YELLOW}当前未配置有效的 endpoint，跳过导入{NC}")
+        print(f"{YELLOW}No valid endpoint configured, skipping import{NC}")
         return providers
-    name = input("为当前配置命名: ").strip()
+    name = input("Name this provider: ").strip()
     if not name:
         return providers
     providers = add_provider(providers, name, url, key)
-    print(f"{GREEN}已导入供应商: {name}{NC}")
+    print(f"{GREEN}Imported provider: {name}{NC}")
     return providers
 
 
@@ -344,18 +344,18 @@ def print_two_columns(items, current_model, start_idx):
 def show_menu(classified, config, endpoint_config, providers):
     """Display main menu"""
     active_provider = get_active_provider(providers)
-    provider_name = active_provider["name"] if active_provider else "无 (手动配置)"
+    provider_name = active_provider["name"] if active_provider else "None (manual config)"
 
     print("\n" + GREEN + "=" * 60 + NC)
     print(GREEN + "           Claude Code Model Switch" + NC)
     print(GREEN + "=" * 60 + NC)
     print("")
-    print(f"{YELLOW}当前供应商:{NC} {CYAN}{provider_name}{NC}")
+    print(f"{YELLOW}Active Provider:{NC} {CYAN}{provider_name}{NC}")
     print(f"  Base URL:   {endpoint_config[0] or 'Not Set'}")
     print(f"  Auth Token: {'***' if endpoint_config[1] else 'Not Set'}")
     if providers:
         names = [f"{CYAN}{p['name']}{NC}" if p.get("active") else p["name"] for p in providers]
-        print(f"  已保存供应商: {', '.join(names)}")
+        print(f"  Saved Providers: {', '.join(names)}")
     print("")
     print(f"{YELLOW}Current Configuration:{NC}")
     print(f"  Main Model (ANTHROPIC_MODEL):  {config[0] or 'Not Set'}")
@@ -376,15 +376,15 @@ def show_menu(classified, config, endpoint_config, providers):
             idx = print_two_columns(models, config[0], idx)
             print("")
 
-    print(f"{CYAN}--- 模型设置 ---{NC}")
+    print(f"{CYAN}--- Model Settings ---{NC}")
     print("  [h] Set Haiku    [o] Set Opus    [s] Set Sonnet    [m] Set Main")
-    print("  [a] 自定义模型名  [r] 同步所有模型为 Main")
+    print("  [a] Custom model  [r] Sync all to Main")
     print("")
-    print(f"{CYAN}--- 供应商管理 ---{NC}")
-    print("  [p] 切换供应商    [+] 添加供应商   [-] 删除供应商")
-    print("  [b] 修改 Base URL [k] 修改 Auth Token")
+    print(f"{CYAN}--- Provider Management ---{NC}")
+    print("  [p] Switch Provider  [+] Add Provider   [-] Remove Provider")
+    print("  [b] Set Base URL     [k] Set Auth Token")
     print("")
-    print("  [q] 退出")
+    print("  [q] Quit")
     print("")
 
 
@@ -405,18 +405,18 @@ def select_model_menu(all_models, target_name):
 def provider_switch_menu(providers):
     """Show provider switching menu. Returns (providers, new_models_or_None)."""
     if not providers:
-        print(f"{YELLOW}尚未保存任何供应商，请先添加{NC}")
+        print(f"{YELLOW}No providers saved yet, please add one first{NC}")
         return providers, None
 
     prev_active = get_active_provider(providers)
 
-    print(f"\n{CYAN}选择供应商:{NC}")
+    print(f"\n{CYAN}Select Provider:{NC}")
     for i, p in enumerate(providers, 1):
-        marker = f" {GREEN}← 当前{NC}" if p.get("active") else ""
+        marker = f" {GREEN}<- active{NC}" if p.get("active") else ""
         print(f"  {i}. {p['name']} ({p['base_url']}){marker}")
-    print("  [q] 返回")
+    print("  [q] Back")
 
-    choice = input("选择: ").strip()
+    choice = input("Choose: ").strip()
     if not (choice.isdigit() and 1 <= int(choice) <= len(providers)):
         return providers, None
 
@@ -425,22 +425,22 @@ def provider_switch_menu(providers):
     # Verify connectivity BEFORE writing config
     models = fetch_models(selected["base_url"], selected["api_key"])
     if not models:
-        print(f"{RED}无法从 {selected['name']} 获取模型列表，未切换{NC}")
+        print(f"{RED}Failed to fetch models from {selected['name']}, not switched{NC}")
         if prev_active:
-            print(f"{YELLOW}保持当前供应商: {prev_active['name']}{NC}")
+            print(f"{YELLOW}Keeping current provider: {prev_active['name']}{NC}")
         return providers, None
 
     # Verified OK — now apply
     set_active_provider(providers, selected["name"])
     update_endpoint_config(base_url=selected["base_url"], api_key=selected["api_key"])
-    print(f"{GREEN}已切换到: {selected['name']} ({selected['base_url']}){NC}")
+    print(f"{GREEN}Switched to: {selected['name']} ({selected['base_url']}){NC}")
     return providers, models
 
 
 def provider_add_menu(providers):
     """Interactive menu to add a new provider. Returns (providers, new_models_or_None)."""
-    print(f"\n{CYAN}添加新供应商:{NC}")
-    name = input("  供应商名称: ").strip()
+    print(f"\n{CYAN}Add New Provider:{NC}")
+    name = input("  Provider Name: ").strip()
     if not name:
         return providers, None
     base_url = input("  Base URL: ").strip()
@@ -451,40 +451,40 @@ def provider_add_menu(providers):
         return providers, None
 
     providers = add_provider(providers, name, base_url, api_key)
-    print(f"{GREEN}已添加供应商: {name}{NC}")
+    print(f"{GREEN}Added provider: {name}{NC}")
 
-    activate = input("是否立即切换到此供应商? [Y/n]: ").strip().lower()
+    activate = input("Switch to this provider now? [Y/n]: ").strip().lower()
     if activate == 'n':
         return providers, None
 
     # Verify before switching
     models = fetch_models(base_url, api_key)
     if not models:
-        print(f"{RED}无法从 {name} 获取模型列表，未切换{NC}")
+        print(f"{RED}Failed to fetch models from {name}, not switched{NC}")
         return providers, None
 
     set_active_provider(providers, name)
     update_endpoint_config(base_url=base_url, api_key=api_key)
-    print(f"{GREEN}已切换到: {name}{NC}")
+    print(f"{GREEN}Switched to: {name}{NC}")
     return providers, models
 
 
 def provider_remove_menu(providers):
     """Interactive menu to remove a provider"""
     if not providers:
-        print(f"{YELLOW}没有已保存的供应商{NC}")
+        print(f"{YELLOW}No providers saved{NC}")
         return providers
 
-    print(f"\n{CYAN}删除供应商:{NC}")
+    print(f"\n{CYAN}Remove Provider:{NC}")
     for i, p in enumerate(providers, 1):
         print(f"  {i}. {p['name']} ({p['base_url']})")
-    print("  [q] 返回")
+    print("  [q] Back")
 
-    choice = input("选择要删除的供应商: ").strip()
+    choice = input("Select provider to remove: ").strip()
     if choice.isdigit() and 1 <= int(choice) <= len(providers):
         removed = providers[int(choice) - 1]
         providers = remove_provider(providers, removed["name"])
-        print(f"{GREEN}已删除: {removed['name']}{NC}")
+        print(f"{GREEN}Removed: {removed['name']}{NC}")
     return providers
 
 
@@ -569,7 +569,7 @@ def main():
     else:
         api_url, api_key = get_current_endpoint_config()
         if not providers and api_url and api_url != "https://api.example.com":
-            print(f"{YELLOW}检测到已有 endpoint 配置，是否保存为供应商?{NC}")
+            print(f"{YELLOW}Existing endpoint detected, save as provider?{NC}")
             if input("[Y/n]: ").strip().lower() != 'n':
                 providers = import_current_as_provider(providers)
                 if providers:
@@ -583,16 +583,16 @@ def main():
         for p in providers:
             if p["name"] == active_name:
                 continue
-            print(f"{YELLOW}尝试 fallback 到供应商: {p['name']} ...{NC}")
+            print(f"{YELLOW}Trying fallback provider: {p['name']} ...{NC}")
             all_models = fetch_models(p["base_url"], p["api_key"])
             if all_models:
                 set_active_provider(providers, p["name"])
                 update_endpoint_config(base_url=p["base_url"], api_key=p["api_key"])
-                print(f"{GREEN}已 fallback 到: {p['name']}{NC}")
+                print(f"{GREEN}Fell back to: {p['name']}{NC}")
                 break
 
     if not all_models:
-        print(f"{RED}所有供应商均无法获取模型列表，退出{NC}")
+        print(f"{RED}All providers failed to fetch models, exiting{NC}")
         sys.exit(1)
 
     classified = classify_models(all_models)
@@ -603,7 +603,7 @@ def main():
         nonlocal classified, all_models
         all_models = raw_models
         classified = classify_models(raw_models)
-        print(f"{GREEN}已刷新模型列表 ({len(raw_models)} models){NC}")
+        print(f"{GREEN}Refreshed model list ({len(raw_models)} models){NC}")
 
     def reload_models(prev_url=None, prev_key=None):
         """Re-fetch models from current endpoint. Rollback on failure if prev given."""
@@ -614,7 +614,7 @@ def main():
             return True
         print(f"{YELLOW}Warning: could not fetch models{NC}")
         if prev_url is not None:
-            print(f"{YELLOW}回滚到之前的 endpoint 配置{NC}")
+            print(f"{YELLOW}Rolling back to previous endpoint config{NC}")
             update_endpoint_config(base_url=prev_url, api_key=prev_key)
         return False
 

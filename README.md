@@ -24,10 +24,10 @@ A CLI tool for quickly switching Claude Code default models. Supports multiple A
            Claude Code Model Switch
 ============================================================
 
-当前供应商: my-proxy
+Active Provider: my-proxy
   Base URL:   https://api.example.com
   Auth Token: ***
-  已保存供应商: my-proxy, backup-provider
+  Saved Providers: my-proxy, backup-provider
 
 Current Configuration:
   Main Model (ANTHROPIC_MODEL):  claude-3-opus
@@ -45,15 +45,15 @@ Current Configuration:
 7. gemini-2.5-pro                    11. gemini-3-pro
 ...
 
---- 模型设置 ---
+--- Model Settings ---
   [h] Set Haiku    [o] Set Opus    [s] Set Sonnet    [m] Set Main
-  [a] 自定义模型名  [r] 同步所有模型为 Main
+  [a] Custom model  [r] Sync all to Main
 
---- 供应商管理 ---
-  [p] 切换供应商    [+] 添加供应商   [-] 删除供应商
-  [b] 修改 Base URL [k] 修改 Auth Token
+--- Provider Management ---
+  [p] Switch Provider  [+] Add Provider   [-] Remove Provider
+  [b] Set Base URL     [k] Set Auth Token
 
-  [q] 退出
+  [q] Quit
 ```
 
 ## Prerequisites
