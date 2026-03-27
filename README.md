@@ -1,9 +1,12 @@
 # Claude Model Switch
 
-A CLI tool for quickly switching Claude Code default models. Automatically fetches available models from your CLIProxyAPI endpoint.
+A CLI tool for quickly switching Claude Code default models. Supports multiple API providers with saved profiles and automatic fallback.
 
 ## Features
 
+- **Multi-provider management** - save, switch, add, and remove API provider profiles (`~/.claude/providers.json`)
+- **Auto-fallback** - if the active provider fails, automatically tries other saved providers
+- **Rollback protection** - verifies connectivity before applying a switch; reverts on failure
 - Automatically fetches available models from your API
 - Supports setting individual model configurations (Main, Haiku, Opus, Sonnet)
 - Two-column display with alphabetical sorting
@@ -21,15 +24,16 @@ A CLI tool for quickly switching Claude Code default models. Automatically fetch
            Claude Code Model Switch
 ============================================================
 
-Endpoint:
-  Base URL (ANTHROPIC_BASE_URL):      https://api.example.com
-  Auth Token (ANTHROPIC_AUTH_TOKEN):  ***
+当前供应商: my-proxy
+  Base URL:   https://api.example.com
+  Auth Token: ***
+  已保存供应商: my-proxy, backup-provider
 
 Current Configuration:
-  Main Model (ANTHROPIC_MODEL):       claude-3-opus
-  Haiku Model:                        claude-3-haiku
-  Opus Model:                         claude-3-opus
-  Sonnet Model:                       claude-3-sonnet
+  Main Model (ANTHROPIC_MODEL):  claude-3-opus
+  Haiku Model:                   claude-3-haiku
+  Opus Model:                    claude-3-opus
+  Sonnet Model:                  claude-3-sonnet
 
 --- Claude/Minimax Compatible (5) ---
 1. claude-3-haiku                    4. minimax-m2
@@ -41,18 +45,15 @@ Current Configuration:
 7. gemini-2.5-pro                    11. gemini-3-pro
 ...
 
---- Set Individual Models ---
-  [h] Set Haiku Model          [o] Set Opus Model
-  [s] Set Sonnet Model         [m] Set Main Model (ANTHROPIC_MODEL)
+--- 模型设置 ---
+  [h] Set Haiku    [o] Set Opus    [s] Set Sonnet    [m] Set Main
+  [a] 自定义模型名  [r] 同步所有模型为 Main
 
---- Endpoint Operations ---
-  [b] Set Base URL (ANTHROPIC_BASE_URL)
-  [k] Set Auth Token (ANTHROPIC_AUTH_TOKEN)
+--- 供应商管理 ---
+  [p] 切换供应商    [+] 添加供应商   [-] 删除供应商
+  [b] 修改 Base URL [k] 修改 Auth Token
 
---- Batch Operations ---
-  [a] Custom model name input
-  [r] Sync all models to main model
-  [q] Quit
+  [q] 退出
 ```
 
 ## Prerequisites
@@ -64,7 +65,7 @@ Current Configuration:
 ## Installation
 
 ```bash
-git clone https://github.com/yourusername/claude-model-switch.git
+git clone https://github.com/zhifu1996/claude-model-switch.git
 cd claude-model-switch
 ./install.sh
 source ~/.bashrc
@@ -89,6 +90,8 @@ export ANTHROPIC_DEFAULT_OPUS_MODEL="claude-3-opus"
 export ANTHROPIC_DEFAULT_SONNET_MODEL="claude-3-sonnet"
 ```
 
+On first run, the tool will detect existing endpoint configuration and offer to save it as a provider profile.
+
 ## Usage
 
 ### Interactive Mode
@@ -99,6 +102,8 @@ claude-model-switch
 
 ### Menu Options
 
+#### Model Settings
+
 | Key | Action |
 |-----|--------|
 | Number | Select a model, then choose which config to set |
@@ -106,10 +111,23 @@ claude-model-switch
 | [o] | Set Opus model |
 | [s] | Set Sonnet model |
 | [m] | Set Main model (ANTHROPIC_MODEL) |
-| [b] | Set Base URL (ANTHROPIC_BASE_URL) |
-| [k] | Set Auth Token (ANTHROPIC_AUTH_TOKEN) |
 | [a] | Enter custom model name |
 | [r] | Sync all models to the current main model |
+
+#### Provider Management
+
+| Key | Action |
+|-----|--------|
+| [p] | Switch between saved providers |
+| [+] | Add a new provider (name, URL, token) |
+| [-] | Remove a saved provider |
+| [b] | Set Base URL (ANTHROPIC_BASE_URL) |
+| [k] | Set Auth Token (ANTHROPIC_AUTH_TOKEN) |
+
+#### Other
+
+| Key | Action |
+|-----|--------|
 | [q] | Quit |
 
 ### After Selecting a Model
@@ -130,6 +148,38 @@ claude-model-switch 3          # Switch to model #3
 claude-model-switch --update   # Sync scripts to ~/.local/bin
 claude-model-switch --help     # Show help
 ```
+
+## Provider Profiles
+
+Provider profiles are stored in `~/.claude/providers.json`:
+
+```json
+{
+  "providers": [
+    {
+      "name": "my-proxy",
+      "base_url": "https://api.example.com",
+      "api_key": "sk-xxx",
+      "active": true
+    },
+    {
+      "name": "backup",
+      "base_url": "https://backup.example.com",
+      "api_key": "sk-yyy",
+      "active": false
+    }
+  ]
+}
+```
+
+### Fallback Behavior
+
+| Scenario | Behavior |
+|----------|----------|
+| Startup: active provider fails | Tries other saved providers in order; uses first one that responds |
+| Switch `[p]`: new provider fails | Does not apply the switch; stays on current provider |
+| Add `[+]` with activate: fails | Provider is saved but not activated |
+| Manual URL/Token `[b]`/`[k]`: fails | Rolls back to previous URL/Token |
 
 ## Updating Scripts
 
@@ -181,6 +231,7 @@ This will remove:
 - `~/.local/bin/claude-model-switch-uninstall`
 - `~/.claude/tools/model-list.json`
 - `~/.claude/tools/model.json`
+- `~/.claude/providers.json` (saved provider profiles)
 - Shell function from `~/.bashrc`
 
 ## License
