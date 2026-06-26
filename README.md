@@ -6,6 +6,7 @@ A CLI tool for quickly switching Claude Code default models. Supports multiple A
 
 - **Multi-provider management** - save, switch, add, and remove API provider profiles (`~/.claude/providers.json`)
 - **Auto-fallback** - if the active provider fails, automatically tries other saved providers
+- **Endpoint compatibility** - automatically detects model list API path (`/api/provider/claude/v1/models` → `/v1/models`)
 - **Rollback protection** - verifies connectivity before applying a switch; reverts on failure
 - Automatically fetches available models from your API
 - Supports setting individual model configurations (Main, Haiku, Opus, Sonnet)
@@ -180,6 +181,7 @@ Provider profiles are stored in `~/.claude/providers.json`:
 | Switch `[p]`: new provider fails | Does not apply the switch; stays on current provider |
 | Add `[+]` with activate: fails | Provider is saved but not activated |
 | Manual URL/Token `[b]`/`[k]`: fails | Rolls back to previous URL/Token |
+| Model list endpoint returns 404 | Retries with standard `/v1/models` path |
 
 ## Updating Scripts
 
