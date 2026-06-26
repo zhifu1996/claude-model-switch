@@ -117,15 +117,18 @@ def import_current_as_provider(providers):
 def fetch_models(api_url, api_key):
     """Fetch available models from API"""
     print(f"{BLUE}Fetching models from {api_url} ...{NC}")
-    url = f"{api_url}/api/provider/claude/v1/models"
-    req = urllib.request.Request(url, headers={'Authorization': f'Bearer {api_key}'})
-    try:
-        with urllib.request.urlopen(req, timeout=10, context=_SSL_CTX) as resp:
-            data = json.loads(resp.read().decode())
-            return [m['id'] for m in data.get('data', [])]
-    except Exception as e:
-        print(f"{RED}Failed to fetch models: {e}{NC}")
-        return []
+    last_error = None
+    for path in ("/api/provider/claude/v1/models", "/v1/models"):
+        url = f"{api_url.rstrip('/')}{path}"
+        req = urllib.request.Request(url, headers={'Authorization': f'Bearer {api_key}'})
+        try:
+            with urllib.request.urlopen(req, timeout=10, context=_SSL_CTX) as resp:
+                data = json.loads(resp.read().decode())
+                return [m['id'] for m in data.get('data', [])]
+        except Exception as e:
+            last_error = e
+    print(f"{RED}Failed to fetch models: {last_error}{NC}")
+    return []
 
 
 def classify_models(models):
